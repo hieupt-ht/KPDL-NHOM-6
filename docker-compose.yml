@@ -1,0 +1,166 @@
+name: cyber-radar-vn
+
+x-python-env: &python-env
+  PYTHONPATH: /app
+  AUTH_ENABLED: ${AUTH_ENABLED:-false}
+  SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-true}
+  TZ_LOCAL: ${TZ_LOCAL:-Asia/Ho_Chi_Minh}
+
+x-python-health: &python-health
+  interval: 15s
+  timeout: 5s
+  retries: 8
+  start_period: 30s
+
+services:
+  warehouse-db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${WAREHOUSE_DB}
+      POSTGRES_USER: ${WAREHOUSE_ADMIN_USER}
+      POSTGRES_PASSWORD: ${WAREHOUSE_ADMIN_PASSWORD}
+      INGESTION_DB_PASSWORD: ${INGESTION_DB_PASSWORD}
+      LOGIC_DB_PASSWORD: ${LOGIC_DB_PASSWORD}
+    volumes:
+      - warehouse-data:/var/lib/postgresql/data
+      - ./db/warehouse/init:/docker-entrypoint-initdb.d:ro
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [cyber-net]
+
+  mart-db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${MART_DB}
+      POSTGRES_USER: ${MART_ADMIN_USER}
+      POSTGRES_PASSWORD: ${MART_ADMIN_PASSWORD}
+      LOGIC_DB_PASSWORD: ${LOGIC_DB_PASSWORD}
+      API_DB_PASSWORD: ${API_DB_PASSWORD}
+    volumes:
+      - mart-data:/var/lib/postgresql/data
+      - ./db/mart/init:/docker-entrypoint-initdb.d:ro
+    ports: ["5433:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [cyber-net]
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.2
+    command: start-dev --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_BOOTSTRAP_ADMIN_USERNAME}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD}
+      KC_HOSTNAME: http://localhost:8080
+    volumes:
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    ports: ["8080:8080"]
+    networks: [cyber-net]
+
+  ingestion:
+    build: {context: ., dockerfile: services/ingestion/Dockerfile}
+    environment:
+      <<: *python-env
+      WAREHOUSE_DSN: postgresql://ingestion_user:${INGESTION_DB_PASSWORD}@warehouse-db:5432/${WAREHOUSE_DB}
+      CF_API_TOKEN: ${CF_API_TOKEN}
+      INGESTION_INTERVAL_SECONDS: ${INGESTION_INTERVAL_SECONDS:-300}
+    depends_on:
+      warehouse-db: {condition: service_healthy}
+    healthcheck:
+      <<: *python-health
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+    networks: [cyber-net]
+
+  analysis:
+    build: {context: ., dockerfile: services/analysis/Dockerfile}
+    environment:
+      <<: *python-env
+      WAREHOUSE_DSN: postgresql://logic_user:${LOGIC_DB_PASSWORD}@warehouse-db:5432/${WAREHOUSE_DB}
+      MART_DSN: postgresql://logic_user:${LOGIC_DB_PASSWORD}@mart-db:5432/${MART_DB}
+      ANALYSIS_INTERVAL_SECONDS: ${ANALYSIS_INTERVAL_SECONDS:-300}
+    ports: ["8001:8001"]
+    depends_on:
+      warehouse-db: {condition: service_healthy}
+      mart-db: {condition: service_healthy}
+    healthcheck:
+      <<: *python-health
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+    networks: [cyber-net]
+
+  clustering:
+    build: {context: ., dockerfile: services/clustering/Dockerfile}
+    environment:
+      <<: *python-env
+      WAREHOUSE_DSN: postgresql://logic_user:${LOGIC_DB_PASSWORD}@warehouse-db:5432/${WAREHOUSE_DB}
+      MART_DSN: postgresql://logic_user:${LOGIC_DB_PASSWORD}@mart-db:5432/${MART_DB}
+      CLUSTERING_CRON_HOUR: ${CLUSTERING_CRON_HOUR:-0}
+      CLUSTERING_CRON_MINUTE: ${CLUSTERING_CRON_MINUTE:-30}
+    ports: ["8002:8002"]
+    depends_on:
+      warehouse-db: {condition: service_healthy}
+      mart-db: {condition: service_healthy}
+    healthcheck:
+      <<: *python-health
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
+    networks: [cyber-net]
+
+  prediction:
+    build: {context: ., dockerfile: services/prediction/Dockerfile}
+    environment:
+      <<: *python-env
+      WAREHOUSE_DSN: postgresql://logic_user:${LOGIC_DB_PASSWORD}@warehouse-db:5432/${WAREHOUSE_DB}
+      MART_DSN: postgresql://logic_user:${LOGIC_DB_PASSWORD}@mart-db:5432/${MART_DB}
+      PREDICTION_INTERVAL_SECONDS: ${PREDICTION_INTERVAL_SECONDS:-300}
+    ports: ["8003:8003"]
+    depends_on:
+      warehouse-db: {condition: service_healthy}
+      mart-db: {condition: service_healthy}
+    healthcheck:
+      <<: *python-health
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')"]
+    networks: [cyber-net]
+
+  api:
+    build: {context: ., dockerfile: services/api/Dockerfile}
+    environment:
+      <<: *python-env
+      MART_DSN: postgresql://api_user:${API_DB_PASSWORD}@mart-db:5432/${MART_DB}
+      KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+    ports: ["8000:8000"]
+    depends_on:
+      mart-db: {condition: service_healthy}
+      keycloak: {condition: service_started}
+    healthcheck:
+      <<: *python-health
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+    networks: [cyber-net]
+
+  frontend:
+    build: {context: ./frontend, dockerfile: Dockerfile}
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      AUTH_SECRET: ${AUTH_SECRET}
+      KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+    ports: ["3000:3000"]
+    depends_on:
+      api: {condition: service_healthy}
+      keycloak: {condition: service_started}
+    networks: [cyber-net]
+
+volumes:
+  warehouse-data:
+  mart-data:
+
+networks:
+  cyber-net:
+    driver: bridge

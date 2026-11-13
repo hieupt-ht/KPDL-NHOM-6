@@ -1,0 +1,13 @@
+export type Metric = "http_traffic" | "l7_attack" | "bot_share" | "human_share" | "netflows";
+export type DateRange = { start?: string; end?: string };
+export type TimeseriesPoint = { granularity: "day" | "week" | "month"; ts: string; metric: Metric; mean: number; min: number; max: number };
+export type HistogramBin = { metric: Metric; bin_start: number; bin_end: number; count: number };
+export type TrendPoint = { granularity: "month" | "week"; ts: string; metric: Metric; trend_value: number };
+export type SeasonalPoint = { period_type: "hour_of_day" | "day_of_week" | "month"; bucket: number; metric: Metric; value: number };
+export type CorrelationPoint = { var_x: Metric; var_y: Metric; coef: number; computed_at: string };
+export type ClusterResult = { date: string; cluster_id: number; cluster_name: string; features: Record<string, number>; computed_at: string };
+export type ForecastContinuous = { target_date: string; predicted_value: number; model_name: string; created_at: string };
+export type ForecastDiscrete = { target_date: string; label: "Cao" | "Thấp"; probability: number; model_name: string; created_at: string };
+export type ServiceRun = { id: number; service: string; started_at: string | null; finished_at: string | null; status: string; error: string | null };
+export type DataFreshness = { id: number; latest_silver_ts: string | null; computed_at: string };
+export type StatusResponse = { service_runs: ServiceRun[]; data_freshness: DataFreshness | null };
