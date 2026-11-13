@@ -1,0 +1,80 @@
+# =========================================================
+#  Bí mật & biến môi trường — TUYỆT ĐỐI không commit
+# =========================================================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# =========================================================
+#  Python (backend/, services/, training/)
+# =========================================================
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# =========================================================
+#  Node / Next.js (frontend/)
+# =========================================================
+node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/next-env.d.ts
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.vercel/
+
+# =========================================================
+#  Dữ liệu & mô hình
+#  - Không commit dữ liệu thô / dump DB
+#  - Model .pkl: chỉ commit nếu nhẹ (< vài MB); nặng thì dùng Git LFS
+# =========================================================
+data/
+*.csv
+*.parquet
+*.dump
+*.sql.gz
+!db/**/*.sql
+# Bỏ comment dòng dưới nếu model quá nặng và dùng Git LFS / script tải về
+# models/*.pkl
+
+# =========================================================
+#  Docker
+# =========================================================
+docker-compose.override.yml
+*.log
+
+# =========================================================
+#  IDE & hệ điều hành
+# =========================================================
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini

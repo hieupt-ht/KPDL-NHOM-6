@@ -1,0 +1,41 @@
+# =========================================================
+#  CODEOWNERS — tự động gán người review cho Pull Request
+#  Dòng phía dưới được ưu tiên hơn dòng phía trên.
+#
+#  ⚠️ THAY các tên giữ chỗ <...> bằng username GitHub thật
+#     của từng thành viên (dạng @username), rồi xóa dòng này.
+# =========================================================
+
+# Mặc định: trưởng nhóm review mọi thứ chưa có người phụ trách
+*                               @<truong-nhom>
+
+# ---------- Hạ tầng & cấu hình chung ----------
+/docker-compose.yml             @<truong-nhom>
+/.env.example                   @<truong-nhom>
+/.github/                       @<truong-nhom>
+/keycloak/                      @<phu-trach-api>
+
+# ---------- Cơ sở dữ liệu ----------
+/db/warehouse/                  @<phu-trach-ingestion>
+/db/mart/                       @<phu-trach-business-logic>
+
+# ---------- Backend dùng chung ----------
+/backend/common/                @<truong-nhom> @<phu-trach-business-logic>
+
+# ---------- Các service ----------
+/services/ingestion/            @<phu-trach-ingestion>
+/services/analysis/             @<phu-trach-business-logic>
+/services/clustering/           @<phu-trach-ml>
+/services/prediction/           @<phu-trach-ml>
+/services/api/                  @<phu-trach-api>
+
+# ---------- Mô hình & huấn luyện ----------
+/training/                      @<phu-trach-ml>
+/models/                        @<phu-trach-ml>
+
+# ---------- Frontend ----------
+/frontend/                      @<phu-trach-frontend>
+
+# ---------- Tài liệu ----------
+/README.md                      @<truong-nhom>
+/docs/                          @<truong-nhom>
