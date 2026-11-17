@@ -297,9 +297,13 @@ Các service chỉ **nạp mô hình đã huấn luyện sẵn** từ `models/` 
 
 ## 6. API và xác thực SSO/OIDC
 
+> **Tiến độ Backend/API:** API đọc Gold đã có triển khai và kiểm thử riêng; xem [hợp đồng API](docs/api-contract.md) và [hướng dẫn chạy/kiểm thử](docs/backend-api-local.md). Đã bổ sung JWT/Keycloak, phân quyền Viewer/Admin, Jobs API và runner có nhật ký/chống chạy trùng; xem [hướng dẫn xác thực và job](docs/backend-auth-jobs.md). Tác vụ Analysis/ML hiện vẫn là stub và sẽ được ghi failed khi kích hoạt; Auth.js ở frontend cần tích hợp tiếp. Với schema Gold hiện tại, histogram/seasonal/correlation và status từ chối `start`/`end` bằng 422; timeseries/clusters hỗ trợ `limit`/`offset` và header phân trang. Các điểm dưới đây mô tả kiến trúc mục tiêu; hợp đồng chi tiết ghi rõ hành vi hiện tại và nullability.
+
 ### 6.1. Endpoint dữ liệu
 
-API viết bằng FastAPI, chạy ở port `8000`, đọc từ Data Mart. Mọi endpoint nhận tham số `start` và `end` (ISO 8601) để lọc theo khoảng thời gian.
+**Kiểm thử Backend bằng Docker:** PowerShell `./services/api/tests/run.ps1 -Mode All`, hoặc Bash `bash services/api/tests/run.sh all` (`unit`/`integration` để chạy từng phần). Bộ test dùng DB/Keycloak/mạng riêng, không cần Python/Node local hoặc `.env` và không chạm dữ liệu ứng dụng. Xem [hướng dẫn Docker](docs/backend-api-local.md) và [bàn giao tích hợp](docs/backend-integration-handoff.md). CI chạy cùng bộ test cho PR backend vào `develop`.
+
+API viết bằng FastAPI, chạy ở port `8000`, đọc từ Data Mart. Timeseries, trend, clusters và forecast nhận `start`/`end` (ISO 8601 có múi giờ); histogram/seasonal/correlation là snapshot nên chưa hỗ trợ khoảng thời gian tùy chọn. Xem hợp đồng API để biết phân trang và các mã lỗi.
 
 | Endpoint | Pattern |
 | :--- | :--- |
@@ -312,6 +316,7 @@ API viết bằng FastAPI, chạy ở port `8000`, đọc từ Data Mart. Mọi 
 | `GET /api/forecast/continuous` | Dự báo chỉ số lưu lượng ngày mai |
 | `GET /api/forecast/discrete` | Nhãn rủi ro ngày mai |
 | `GET /api/status` | Lần chạy gần nhất của từng service và độ mới của dữ liệu |
+| `GET /api/me` | Username, sub và role của người dùng đã xác thực |
 | `POST /api/jobs/{analysis\|clustering\|prediction}/run` | Kích hoạt Business Logic (cần role `admin`) |
 
 - Bảng Gold trống thì API trả **`404`** kèm thông báo rõ ràng. Đây là lỗi cần thấy ở bước 5 của demo.

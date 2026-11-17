@@ -27,5 +27,5 @@ def compute_correlation() -> None:
 
 
 def run_all() -> None:
-    """Chạy toàn bộ tác vụ phân tích và ghi thời điểm dữ liệu mới nhất."""
+    """Chạy phân tích và freshness; common.runner chịu trách nhiệm ghi service_runs."""
     raise NotImplementedError

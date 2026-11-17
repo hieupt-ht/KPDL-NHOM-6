@@ -2,14 +2,57 @@
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
-
+import httpx
 from auth import require_admin
+from common.config import settings
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, ValidationError
 
-router = APIRouter(dependencies=[Depends(require_admin)])
+router = APIRouter(dependencies=[Depends(require_admin)], tags=["Jobs"])
 
 
-@router.post("/jobs/{service}/run")
-def run_job(service: Literal["analysis", "clustering", "prediction"]) -> None:
-    """Kích hoạt service Business Logic tương ứng sau khi kiểm tra admin."""
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+class AcceptedJob(BaseModel):
+    service: Literal["analysis", "clustering", "prediction"]
+    run_id: int
+    status: Literal["accepted"]
+
+
+@router.post("/jobs/{service}/run", status_code=202, response_model=AcceptedJob)
+def run_job(service: Literal["analysis", "clustering", "prediction"]) -> AcceptedJob:
+    """Only trigger a fixed service URL; the service owns execution and Gold writes."""
+    token = settings.job_trigger_token.get_secret_value()
+    if settings.auth_enabled and not token:
+        raise HTTPException(503, "Internal job authentication is not configured")
+    url = {
+        "analysis": settings.analysis_url,
+        "clustering": settings.clustering_url,
+        "prediction": settings.prediction_url,
+    }[service]
+    try:
+        # No automatic retry: a timed-out request might already have started a job.
+        with httpx.Client(
+            timeout=settings.job_request_timeout_seconds, trust_env=False
+        ) as client:
+            response = client.post(
+                url.rstrip("/") + "/run",
+                headers={"X-Job-Token": token} if token else {},
+            )
+    except httpx.TimeoutException:
+        raise HTTPException(
+            504, "Job request timed out; check status before retrying"
+        ) from None
+    except httpx.RequestError:
+        raise HTTPException(503, "Job service is unavailable") from None
+    if response.status_code == 409:
+        raise HTTPException(409, "This service already has a running job")
+    if response.status_code == 503:
+        raise HTTPException(503, "Job service is not ready")
+    if response.status_code != 202:
+        raise HTTPException(502, "Job service rejected the request")
+    try:
+        result = AcceptedJob.model_validate(response.json())
+        if result.service != service or result.run_id <= 0:
+            raise ValueError("Unexpected job identity")
+        return result
+    except (ValueError, ValidationError):
+        raise HTTPException(502, "Job service returned an invalid response") from None

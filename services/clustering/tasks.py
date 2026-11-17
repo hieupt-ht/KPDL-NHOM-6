@@ -14,5 +14,5 @@ def assign_clusters() -> None:
 
 
 def run_all() -> None:
-    """Chạy quy trình phân cụm và ghi nhật ký service_runs."""
+    """Chạy phân cụm; common.runner chịu trách nhiệm ghi nhật ký service_runs."""
     raise NotImplementedError

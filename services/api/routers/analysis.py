@@ -1,34 +1,84 @@
-"""Các endpoint kết quả thống kê."""
+"""Precomputed analysis; snapshots cannot be recalculated for arbitrary windows."""
 
-from datetime import datetime
-from typing import Literal
-
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Annotated, Literal
 
 from auth import require_user
+from dependencies import SnapshotRange, TimeRange, get_mart
+from fastapi import APIRouter, Depends
+from psycopg import Connection, sql
+from repository import read_rows, require_rows, time_conditions
+from schemas import (
+    CorrelationPoint,
+    HistogramBin,
+    Metric,
+    PeriodType,
+    SeasonalPoint,
+    TrendPoint,
+)
 
-router = APIRouter(dependencies=[Depends(require_user)])
-
-
-@router.get("/histogram")
-def get_histogram(metric: str, start: datetime | None = None, end: datetime | None = None) -> None:
-    """Đọc các bin histogram từ Gold."""
-    raise HTTPException(status_code=501, detail="Not implemented yet")
-
-
-@router.get("/trend")
-def get_trend(granularity: Literal["month", "week"], metric: str, start: datetime | None = None, end: datetime | None = None) -> None:
-    """Đọc đường xu hướng từ Gold."""
-    raise HTTPException(status_code=501, detail="Not implemented yet")
-
-
-@router.get("/seasonal")
-def get_seasonal(period_type: Literal["hour_of_day", "day_of_week", "month"], metric: str, start: datetime | None = None, end: datetime | None = None) -> None:
-    """Đọc các giá trị mùa vụ theo chu kỳ từ Gold."""
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+router = APIRouter(dependencies=[Depends(require_user)], tags=["Analysis"])
+Mart = Annotated[Connection, Depends(get_mart)]
+Snapshot = Annotated[SnapshotRange, Depends()]
 
 
-@router.get("/correlation")
-def get_correlation(start: datetime | None = None, end: datetime | None = None) -> None:
-    """Đọc hệ số tương quan giữa các chỉ số từ Gold."""
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+@router.get("/histogram", response_model=list[HistogramBin])
+def get_histogram(metric: Metric, window: Snapshot, connection: Mart):
+    return require_rows(
+        read_rows(
+            connection,
+            "histogram",
+            "metric, bin_start, bin_end, count",
+            "bin_start ASC, bin_end ASC",
+            [sql.SQL("metric = %s")],
+            [metric],
+        )
+    )
+
+
+@router.get("/trend", response_model=list[TrendPoint])
+def get_trend(
+    granularity: Literal["month", "week"],
+    metric: Metric,
+    window: Annotated[TimeRange, Depends()],
+    connection: Mart,
+):
+    clauses, params = time_conditions("ts", window)
+    clauses.extend([sql.SQL("granularity = %s"), sql.SQL("metric = %s")])
+    return require_rows(
+        read_rows(
+            connection,
+            "trend",
+            "granularity, ts, metric, trend_value",
+            "ts ASC",
+            clauses,
+            params + [granularity, metric],
+        )
+    )
+
+
+@router.get("/seasonal", response_model=list[SeasonalPoint])
+def get_seasonal(
+    period_type: PeriodType, metric: Metric, window: Snapshot, connection: Mart
+):
+    return require_rows(
+        read_rows(
+            connection,
+            "seasonal",
+            "period_type, bucket, metric, value",
+            "bucket ASC",
+            [sql.SQL("period_type = %s"), sql.SQL("metric = %s")],
+            [period_type, metric],
+        )
+    )
+
+
+@router.get("/correlation", response_model=list[CorrelationPoint])
+def get_correlation(window: Snapshot, connection: Mart):
+    return require_rows(
+        read_rows(
+            connection,
+            "correlation",
+            "var_x, var_y, coef, computed_at",
+            "var_x ASC, var_y ASC",
+        )
+    )

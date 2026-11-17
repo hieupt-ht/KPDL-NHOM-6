@@ -12,5 +12,5 @@ def predict_discrete() -> None:
 
 
 def run_all() -> None:
-    """Chạy hai dự báo và ghi nhật ký service_runs."""
+    """Chạy hai dự báo; common.runner chịu trách nhiệm ghi nhật ký service_runs."""
     raise NotImplementedError
