@@ -297,6 +297,8 @@ Các service chỉ **nạp mô hình đã huấn luyện sẵn** từ `models/` 
 
 ## 6. API và xác thực SSO/OIDC
 
+> **Tiến độ Backend/API:** API đọc Gold đã có triển khai và kiểm thử riêng; xem [hợp đồng API](docs/api-contract.md) và [hướng dẫn chạy/kiểm thử](docs/backend-api-local.md). Đây là giai đoạn đọc dữ liệu: JWT/SSO và Jobs API vẫn chưa hoàn thiện. Với schema Gold hiện tại, histogram/seasonal/correlation và status từ chối `start`/`end` bằng 422; timeseries/clusters hỗ trợ `limit`/`offset` và header phân trang. Các điểm dưới đây mô tả kiến trúc mục tiêu; hợp đồng chi tiết ghi rõ hành vi hiện tại và nullability.
+
 ### 6.1. Endpoint dữ liệu
 
 API viết bằng FastAPI, chạy ở port `8000`, đọc từ Data Mart. Mọi endpoint nhận tham số `start` và `end` (ISO 8601) để lọc theo khoảng thời gian.

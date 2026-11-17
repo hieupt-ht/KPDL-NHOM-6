@@ -1,5 +1,6 @@
 """Đọc cấu hình từ biến môi trường."""
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -8,6 +9,8 @@ class Settings(BaseSettings):
 
     warehouse_dsn: str = ""
     mart_dsn: str = ""
+    db_connect_timeout_seconds: int = Field(default=5, ge=1, le=60)
+    db_statement_timeout_ms: int = Field(default=10000, ge=1)
     auth_enabled: bool = False
     scheduler_enabled: bool = True
     tz_local: str = "Asia/Ho_Chi_Minh"
