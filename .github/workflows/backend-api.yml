@@ -8,10 +8,14 @@ on:
       - services/analysis/**
       - services/clustering/**
       - services/prediction/**
+      - services/ingestion/**
+      - frontend/**
       - backend/common/**
       - db/**
       - keycloak/**
       - .dockerignore
+      - .env.example
+      - docker-compose.yml
       - .github/workflows/backend-api.yml
   push:
     branches: [develop]
@@ -20,10 +24,14 @@ on:
       - services/analysis/**
       - services/clustering/**
       - services/prediction/**
+      - services/ingestion/**
+      - frontend/**
       - backend/common/**
       - db/**
       - keycloak/**
       - .dockerignore
+      - .env.example
+      - docker-compose.yml
       - .github/workflows/backend-api.yml
   workflow_dispatch:
 
