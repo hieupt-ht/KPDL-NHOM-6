@@ -44,3 +44,5 @@ jobs:
           persist-credentials: false
       - name: Run isolated PostgreSQL, Keycloak and API tests in Docker
         run: bash services/api/tests/run.sh all
+      - name: Smoke test all 9 application containers with fake configuration
+        run: bash services/api/tests/smoke-compose.sh

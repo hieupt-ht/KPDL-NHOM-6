@@ -45,4 +45,4 @@ Exit code khác 0 nghĩa build/startup/test thất bại. Script dọn tài nguy
 
 Chi tiết hợp đồng: [api-contract.md](api-contract.md). JWT/Keycloak và job: [backend-auth-jobs.md](backend-auth-jobs.md). Điểm cần phối hợp với frontend/Analysis/ML: [backend-integration-handoff.md](backend-integration-handoff.md).
 
-CI dùng `.github/workflows/backend-api.yml` để chạy cùng bộ All cho PR backend vào develop; không cần secret của nhóm. Kết quả fixture không thay thế nghiệm thu đủ 9 container, dashboard Auth.js và pipeline Cloudflare → Silver → Analysis/ML → Gold thật.
+CI dùng `.github/workflows/backend-api.yml` để chạy cùng bộ All cho PR backend vào develop; không cần secret của nhóm. CI chạy thêm `bash services/api/tests/smoke-compose.sh` để build/khởi động đủ 9 container theo Compose ứng dụng với cấu hình giả và scheduler tắt. Bước smoke kiểm tra frontend HTTP, Mart readiness, Keycloak và API yêu cầu token; nó không thay thế nghiệm thu Auth.js/dashboard hoặc pipeline Cloudflare → Silver → Analysis/ML → Gold thật. Smoke publish các port ứng dụng trên host, nên chỉ chạy trên host kiểm thử riêng, không chạy cạnh hệ thống đang sử dụng cùng port.
