@@ -1,4 +1,4 @@
-"""Kiểm thử phân tích tính mùa vụ (Seasonal Analysis)."""
+"""Kiểm thử phân tích tính mùa vụ (Seasonal Analysis) toàn diện."""
 
 from datetime import datetime, timezone
 import pandas as pd
@@ -14,7 +14,6 @@ def test_seasonal_hour_of_day_and_day_of_week(sample_silver_df):
     assert "hour_of_day" in period_types
     assert "day_of_week" in period_types
 
-    # Kiểm tra bucket bounds
     for r in records:
         if r["period_type"] == "hour_of_day":
             assert 0 <= r["bucket"] <= 23
@@ -24,6 +23,45 @@ def test_seasonal_hour_of_day_and_day_of_week(sample_silver_df):
             assert 1 <= r["bucket"] <= 12
 
         assert isinstance(r["value"], float)
+
+
+def test_seasonal_exact_mean_calculation():
+    # 3 quan sát cùng rơi vào giờ 15:00 VN (08:00 UTC) vào các ngày khác nhau
+    df = pd.DataFrame([
+        {"ts": datetime(2026, 11, 1, 8, 0, tzinfo=timezone.utc), "metric": "http_traffic", "value": 10.0},
+        {"ts": datetime(2026, 11, 2, 8, 0, tzinfo=timezone.utc), "metric": "http_traffic", "value": 20.0},
+        {"ts": datetime(2026, 11, 3, 8, 0, tzinfo=timezone.utc), "metric": "http_traffic", "value": 30.0},
+    ])
+    records = compute_seasonal_records(df)
+    hour_15 = [r for r in records if r["period_type"] == "hour_of_day" and r["bucket"] == 15]
+    assert len(hour_15) == 1
+    assert hour_15[0]["value"] == 20.0
+
+
+def test_seasonal_timezone_bucket_mapping():
+    # 2026-11-01 17:00:00 UTC = 2026-11-02 00:00:00 VN (Thứ Hai, ngày 2 tháng 11)
+    ts = datetime(2026, 11, 1, 17, 0, 0, tzinfo=timezone.utc)
+    df = pd.DataFrame([{"ts": ts, "metric": "l7_attack", "value": 0.05}])
+    records = compute_seasonal_records(df)
+
+    hour_rec = next(r for r in records if r["period_type"] == "hour_of_day")
+    assert hour_rec["bucket"] == 0  # 00:00 giờ VN
+
+    dow_rec = next(r for r in records if r["period_type"] == "day_of_week")
+    assert dow_rec["bucket"] == 0   # Thứ Hai giờ VN (dayofweek = 0)
+
+    month_rec = next(r for r in records if r["period_type"] == "month")
+    assert month_rec["bucket"] == 11  # Tháng 11
+
+
+def test_seasonal_single_record():
+    ts = datetime(2026, 7, 10, 3, 0, tzinfo=timezone.utc)
+    df = pd.DataFrame([{"ts": ts, "metric": "bot_share", "value": 45.0}])
+    records = compute_seasonal_records(df)
+    # Chỉ sinh 3 bản ghi (1 hour, 1 dow, 1 month)
+    assert len(records) == 3
+    for r in records:
+        assert r["value"] == 45.0
 
 
 def test_seasonal_empty_buckets_not_created():
@@ -37,7 +75,5 @@ def test_seasonal_empty_buckets_not_created():
     records = compute_seasonal_records(df)
     hour_buckets = {r["bucket"] for r in records if r["period_type"] == "hour_of_day"}
     assert hour_buckets == {10, 11}
-    # Các giờ khác không được tự tạo dữ liệu
     assert 0 not in hour_buckets
     assert 23 not in hour_buckets
-

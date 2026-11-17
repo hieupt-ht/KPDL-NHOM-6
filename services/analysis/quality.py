@@ -179,7 +179,8 @@ def evaluate_data_quality(df: pd.DataFrame) -> QualityReport:
         # 4. Kiểm tra khoảng thời gian bị thiếu (gaps > 1h)
         if len(valid_df) >= 2:
             ts_series = valid_df["ts"].drop_duplicates()
-            expected_hours = int((ts_series.max() - ts_series.min()).total_seconds() // 3600) + 1
+            total_sec = (ts_series.max() - ts_series.min()).total_seconds()
+            expected_hours = int(round(total_sec / 3600.0)) + 1
             actual_hours = len(ts_series)
             missing = max(0, expected_hours - actual_hours)
             summary.missing_hours_count = missing
