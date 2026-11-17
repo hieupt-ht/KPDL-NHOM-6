@@ -1,7 +1,6 @@
 """Tách thành phần xu hướng (Trend Analysis) sử dụng statsmodels.seasonal_decompose."""
 
 from collections.abc import Iterable
-from datetime import datetime
 import logging
 from typing import Any
 import zoneinfo
