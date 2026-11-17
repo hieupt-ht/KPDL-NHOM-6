@@ -140,3 +140,11 @@ def test_network_failure_returns_error_without_raising(db_conn):
     client = httpx.Client(transport=httpx.MockTransport(boom))
     res = run(HTTP, client, db_conn)
     assert res.status == "error"
+
+
+def test_window_without_overlap_but_silver_not_empty_is_skipped_not_written_raw(db_conn, fixture_json):
+    # Silver đã có dữ liệu ở nơi khác -> cửa sổ không chồng không được ghi thô (k=1) vì sẽ lệch thang
+    upsert_metrics("http_traffic", {datetime(2020, 1, 1, tzinfo=timezone.utc): 0.5}, conn=db_conn)
+    res = run(HTTP, client_for(fixture_json("winA")), db_conn)
+    assert res.status == "skipped"
+    assert silver_count(db_conn) == 1

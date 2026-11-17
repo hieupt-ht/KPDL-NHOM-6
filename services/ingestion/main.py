@@ -4,16 +4,18 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 
 from backfill import run_backfill
 from bronze import purge_old
 from common.config import settings
 from common.runner import create_service_app
-from config import ConfigError
+from config import CHUNK_DAYS, OVERLAP_DAYS, ConfigError
 from metrics import ENDPOINTS
 from pipeline import EndpointResult, ingest_endpoint
 from radar_client import Window
 from runs import finish_run, start_run
+from silver import latest_ts
 
 log = logging.getLogger(__name__)
 
@@ -23,11 +25,31 @@ BACKFILL_RETRY_SECONDS = 900
 ingest_lock = threading.Lock()
 
 
+def polling_window(now: datetime | None = None, conn=None) -> Window:
+    """2 ngày gần nhất; nếu Silver đã cũ hơn ~36 giờ (dịch vụ từng ngừng) thì mở rộng để chồng lên điểm cuối."""
+    now = now or datetime.now(timezone.utc)
+    try:
+        lasts = [latest_ts(m.name, conn=conn) for e in ENDPOINTS for m in e.metrics if m.scaled]
+    except Exception:  # noqa: BLE001 - không đọc được Silver thì dùng cửa sổ mặc định
+        log.exception("không đọc được mốc Silver cuối")
+        return Window.recent()
+    lasts = [t for t in lasts if t is not None]
+    if not lasts:
+        return Window.recent()
+    oldest_last = min(lasts)
+    if now - oldest_last <= timedelta(hours=36):
+        return Window.recent()
+    start = max(oldest_last - timedelta(days=OVERLAP_DAYS), now - timedelta(days=CHUNK_DAYS))
+    log.info("Silver cũ tới %s, mở rộng cửa sổ thu thập từ %s", oldest_last, start)
+    return Window.between(start, now)
+
+
 def _run_endpoints() -> tuple[str, int, str | None]:
     results: list[EndpointResult] = []
+    window = polling_window()
     for spec in ENDPOINTS:
         try:
-            results.append(ingest_endpoint(spec, Window.recent()))
+            results.append(ingest_endpoint(spec, window))
         except ConfigError:
             raise
         except Exception as exc:  # noqa: BLE001 - một endpoint hỏng không dừng chu kỳ

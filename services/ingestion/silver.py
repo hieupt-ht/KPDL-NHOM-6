@@ -81,3 +81,9 @@ def earliest_ts(metric: str, *, conn: psycopg.Connection | None = None) -> datet
     with use_conn(conn) as c:
         row = c.execute("SELECT min(ts) FROM silver.metrics_hourly WHERE metric = %s", (metric,)).fetchone()
     return row[0].astimezone(timezone.utc) if row and row[0] else None
+
+
+def latest_ts(metric: str, *, conn: psycopg.Connection | None = None) -> datetime | None:
+    with use_conn(conn) as c:
+        row = c.execute("SELECT max(ts) FROM silver.metrics_hourly WHERE metric = %s", (metric,)).fetchone()
+    return row[0].astimezone(timezone.utc) if row and row[0] else None

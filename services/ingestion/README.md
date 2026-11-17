@@ -40,5 +40,5 @@ Radar chuẩn hóa `MIN0_MAX` **theo từng cửa sổ truy vấn**, nên cùng 
 ## Giới hạn đã biết
 
 - Radar có dữ liệu ≥ 500 ngày nhưng độ sâu mục tiêu đặt là **365 ngày** (`BACKFILL_TARGET_DAYS`).
-- Nếu ingestion ngừng hơn ~36 giờ, cửa sổ 2 ngày không đủ 12 điểm chồng nên chu kỳ bỏ qua cửa sổ đó và để lại **khoảng trống** trong Silver; backfill chỉ đi về quá khứ nên không lấp được. Cần nạp bù thủ công.
+- Nếu ingestion ngừng hơn ~36 giờ, chu kỳ kế tiếp tự mở rộng cửa sổ (tối đa 28 ngày) để chồng lên điểm Silver cuối và lấp khoảng trống. Nếu ngừng quá 28 ngày thì không còn vùng chồng để quy đổi: cửa sổ bị bỏ qua (không ghi dữ liệu lệch thang) và cần nạp bù thủ công.
 - Một số giờ có giá trị 0 thật (ví dụ 2026-07-16 11:00); các metric dùng thang quy đổi bỏ qua điểm bằng 0 khi tính `k`.

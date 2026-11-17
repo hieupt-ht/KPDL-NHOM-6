@@ -12,7 +12,7 @@ from bronze import save_raw_response
 from metrics import EndpointSpec
 from radar_client import RadarUnavailable, Window, fetch
 from rescale import apply_scale, compute_scale
-from silver import parse_series, read_range, upsert_metrics
+from silver import earliest_ts, parse_series, read_range, upsert_metrics
 
 log = logging.getLogger(__name__)
 
@@ -62,7 +62,11 @@ def ingest_endpoint(
             continue
         if metric.scaled:
             existing = read_range(metric.name, min(points), max(points), conn=conn)
-            k = 1.0 if not existing else compute_scale(existing, points)
+            if existing:
+                k = compute_scale(existing, points)
+            else:
+                # k=1 chỉ khi Silver chưa có gì cho metric này; nếu đã có mà không chồng thì không ghi thô
+                k = 1.0 if earliest_ts(metric.name, conn=conn) is None else None
             if k is None:
                 skipped.append(metric.name)
                 log.warning("%s: vùng chồng không đủ để quy đổi, bỏ qua cửa sổ này", metric.name)
