@@ -57,36 +57,23 @@ Khi realm đã tồn tại, Keycloak bỏ qua import lúc khởi động. Thay f
 
 Theo dõi qua `GET /api/status` bằng access token. Một phần tử service_runs chứa `id`, `service`, `started_at`, `finished_at`, `status`, `error`. Error lưu trong Gold chỉ là thông báo an toàn và loại ngoại lệ, không sao chép DSN/token hoặc nguyên văn exception.
 
-## Kiểm thử
+## Kiểm thử theo CLAUDE.md
 
-Từ root repo, dùng lệnh có đường dẫn test rõ ràng để pytest không thu thập nhầm test service khác:
-
-```powershell
-uv pip install --python .venv/Scripts/python.exe -r services/api/requirements-dev.txt
-.venv/Scripts/python.exe -m pytest -c services/api/pytest.ini services/api/tests -m 'not integration and not keycloak' -q
-```
-
-Integration PostgreSQL dùng DB `test_*` tách biệt theo `backend-api-local.md`. Export thêm TEST_MART_LOGIC_DSN với logic_user có quyền ghi Gold để kiểm tra runner:
+Không cần Python/Node local hoặc .env. Chạy các script Docker từ root repo:
 
 ```powershell
-$env:TEST_MART_LOGIC_DSN = 'postgresql://logic_user:<test-password>@127.0.0.1:<test-port>/test_mart'
-.venv/Scripts/python.exe -m pytest -c services/api/pytest.ini services/api/tests -m 'not keycloak' -q
+./services/api/tests/run.ps1 -Mode Unit
+./services/api/tests/run.ps1 -Mode Integration
+./services/api/tests/run.ps1 -Mode All
 ```
 
-Kiểm thử Keycloak thật chỉ chạy khi export TEST_KEYCLOAK_URL. Dùng một Compose project kiểm thử riêng, `AUTH_ENABLED=true`, `SCHEDULER_ENABLED=false`, database test_warehouse/test_mart và mật khẩu kiểm thử. Không trỏ test này vào môi trường đang sử dụng: nó đăng nhập và kích hoạt 3 job.
+Bash/Linux: `bash services/api/tests/run.sh unit|integration|all`. Hoặc dùng các target make test-api-unit, make test-api-integration, make test-api. Unit không chạy DB; Integration dùng PostgreSQL thật; All thêm Keycloak, API và service thật. Xem [hướng dẫn Docker](backend-api-local.md).
 
-```powershell
-$env:TEST_KEYCLOAK_URL = 'http://localhost:8080/realms/cyber-radar'
-$env:TEST_API_URL = 'http://127.0.0.1:8000'
-$env:TEST_KEYCLOAK_CLIENT_SECRET = '<test-client-secret>'
-$env:TEST_KEYCLOAK_DEMO_PASSWORD = '<test-viewer-password>'
-$env:TEST_KEYCLOAK_ADMIN_PASSWORD = '<test-admin-password>'
-.venv/Scripts/python.exe -m pytest -c services/api/pytest.ini services/api/tests/test_keycloak_e2e.py -q
-```
+Standalone `services/api/tests/compose.yml` khai báo tất cả cấu hình test-only, không publish port và không truy cập .env, volume hoặc token thật. Test runner tạo mạng nội bộ và database tmpfs riêng, build tuần tự và tự dọn project kpdl-api-tests-* của nó.
 
-Bộ test đăng nhập bằng Authorization Code + PKCE thật, đổi code lấy token rồi gọi API container, kiểm tra Viewer/Admin, từ chối ID token và xác nhận job stub được ghi failed. Nó không bật password grant và không cần frontend thực thi callback. Khi các tác vụ thật được nhóm triển khai, cập nhật kỳ vọng failed của test này cho phù hợp nghiệp vụ.
+Test Keycloak chạy Authorization Code + PKCE thật rồi gọi API container. Kết nối từ test container tới issuer localhost công khai được ánh xạ qua Keycloak nội bộ bởi test transport; Host/cookie origin và các kiểm tra JWT không đổi. HTTPX mô phỏng ngoại lệ cookie Secure của browser chỉ trên HTTP loopback, không tắt kiểm tra bảo mật của ứng dụng.
 
-Máy ít RAM có thể dùng override `services/api/tests/compose.keycloak.yml` với `-f docker-compose.yml -f services/api/tests/compose.keycloak.yml`. Override chỉ dành cho kiểm thử: Keycloak dùng DB in-memory, heap 256 MB và tối đa 2 processor cho JVM; mất realm/session khi dừng. Realm, mapper và API/service code vẫn là các file thật của dự án. Test HTTPX chỉ mô phỏng ngoại lệ cookie Secure của browser trên HTTP loopback; không tắt kiểm tra JWT hoặc thay cấu hình cookie của ứng dụng.
+Mode All xác nhận Viewer/Admin, từ chối ID token, trigger đủ 3 service và theo dõi trạng thái cuối với timestamp. Khi task là stub, journal ghi failed; khi tác vụ đã được triển khai, kết quả có thể là success/partial/skipped/failed. Việc kiểm tra chất lượng kết quả hoặc model thuộc test của Analysis/ML; bộ này không giả định thuật toán phải còn là stub.
 
 Kết quả 17/11/2026: **75 test backend đạt**, gồm 19 test PostgreSQL/runner, cùng **2 test đầu cuối Keycloak thật đạt** (tổng 77). Kiểm thử đã đi qua Authorization Code + PKCE, token exchange, API container lấy JWKS nội bộ, Viewer bị chặn Run, Admin kích hoạt đủ 3 service và status phản ánh stub thất bại đúng. Dữ liệu và mật khẩu dùng trong lần kiểm thử là cấu hình mẫu trên Compose project riêng, scheduler tắt; không phải dữ liệu Cloudflare thật.
 

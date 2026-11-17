@@ -1,0 +1,46 @@
+name: Backend API Docker tests
+
+on:
+  pull_request:
+    branches: [develop]
+    paths:
+      - services/api/**
+      - services/analysis/**
+      - services/clustering/**
+      - services/prediction/**
+      - backend/common/**
+      - db/**
+      - keycloak/**
+      - .dockerignore
+      - .github/workflows/backend-api.yml
+  push:
+    branches: [develop]
+    paths:
+      - services/api/**
+      - services/analysis/**
+      - services/clustering/**
+      - services/prediction/**
+      - backend/common/**
+      - db/**
+      - keycloak/**
+      - .dockerignore
+      - .github/workflows/backend-api.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-api-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Run isolated PostgreSQL, Keycloak and API tests in Docker
+        run: bash services/api/tests/run.sh all

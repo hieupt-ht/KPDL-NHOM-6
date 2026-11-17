@@ -21,6 +21,41 @@ class LoginForm(HTMLParser):
             self.action = values.get("action")
 
 
+class KeycloakBackchannel(httpx.BaseTransport):
+    """Reach the public loopback issuer from Docker without changing token claims."""
+
+    def __init__(self, public_url: str, internal_url: str):
+        self.public = httpx.URL(public_url)
+        self.internal = httpx.URL(internal_url)
+        self.transport = httpx.HTTPTransport(trust_env=False)
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        target = request.url
+        if (target.scheme, target.host, target.port) == (
+            self.public.scheme,
+            self.public.host,
+            self.public.port,
+        ):
+            # Preserve the public Host header, response URL and cookie origin.
+            # Only the connection destination changes inside the test network.
+            target = target.copy_with(
+                scheme=self.internal.scheme,
+                host=self.internal.host,
+                port=self.internal.port,
+            )
+        forwarded = httpx.Request(
+            request.method,
+            target,
+            headers=request.headers,
+            content=request.read(),
+            extensions=request.extensions,
+        )
+        return self.transport.handle_request(forwarded)
+
+    def close(self):
+        self.transport.close()
+
+
 @pytest.fixture(scope="module")
 def keycloak_stack():
     url = os.environ.get("TEST_KEYCLOAK_URL")
@@ -40,7 +75,12 @@ def keycloak_stack():
         state = secrets.token_urlsafe(24)
         callback = "http://localhost:3000/api/auth/callback/keycloak"
         with httpx.Client(
-            timeout=15, trust_env=False, follow_redirects=False
+            timeout=15,
+            trust_env=False,
+            follow_redirects=False,
+            transport=KeycloakBackchannel(
+                url, os.environ.get("TEST_KEYCLOAK_INTERNAL_URL", url)
+            ),
         ) as browser:
             page = browser.get(
                 url + "/protocol/openid-connect/auth",
@@ -129,7 +169,7 @@ def test_real_viewer_and_admin_roles_and_id_token_rejection(keycloak_stack):
 
 
 @pytest.mark.keycloak
-def test_real_admin_triggers_service_and_reads_failed_stub_run(keycloak_stack):
+def test_real_admin_triggers_service_and_reads_terminal_run(keycloak_stack):
     api, login = keycloak_stack
     tokens = login("admin", os.environ["TEST_KEYCLOAK_ADMIN_PASSWORD"])
     headers = {"Authorization": "Bearer " + tokens["access_token"]}
@@ -138,7 +178,10 @@ def test_real_admin_triggers_service_and_reads_failed_stub_run(keycloak_stack):
             response = client.post(api + f"/api/jobs/{service}/run", headers=headers)
             assert response.status_code == 202, f"Cannot trigger {service}"
             run_id = response.json()["run_id"]
-            for _ in range(30):
+            wait_seconds = int(os.environ.get("TEST_JOB_WAIT_SECONDS", "30"))
+            assert 1 <= wait_seconds <= 120
+            deadline = time.monotonic() + wait_seconds
+            while True:
                 status = client.get(api + "/api/status", headers=headers)
                 assert status.status_code == 200
                 row = next(
@@ -151,10 +194,23 @@ def test_real_admin_triggers_service_and_reads_failed_stub_run(keycloak_stack):
                 )
                 if row and row["status"] != "running":
                     break
+                if time.monotonic() >= deadline:
+                    break
                 time.sleep(0.1)
-            assert row and row["status"] == "failed", (
-                "Current Analysis/ML tasks are stubs and must report failure"
+            # This is the backend trigger/journal contract. Analysis/ML own
+            # their algorithm acceptance tests; valid jobs may succeed or fail.
+            assert row and row["status"] in {"success", "failed", "partial", "skipped"}
+            assert row["service"] == service
+            assert row["started_at"] is not None and row["finished_at"] is not None
+            if row["status"] == "failed":
+                assert row["error"]
+                assert os.environ["TEST_KEYCLOAK_ADMIN_PASSWORD"] not in row["error"]
+        for service, port in (
+            ("analysis", 8001),
+            ("clustering", 8002),
+            ("prediction", 8003),
+        ):
+            service_url = os.environ.get(
+                f"TEST_{service.upper()}_URL", f"http://127.0.0.1:{port}"
             )
-            assert row["error"] == "Job implementation is not available yet"
-        for port in (8001, 8002, 8003):
-            assert client.post(f"http://127.0.0.1:{port}/run").status_code == 401
+            assert client.post(service_url + "/run").status_code == 401

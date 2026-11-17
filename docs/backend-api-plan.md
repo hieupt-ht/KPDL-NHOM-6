@@ -6,6 +6,8 @@ Ngày khảo sát: 17/11/2026. Đây là kế hoạch triển khai, chưa phải
 
 ## 1. Căn cứ và hiện trạng
 
+**Đồng bộ theo CLAUDE.md:** đã merge develop `5787e9b`, bổ sung runner Docker cho API (PowerShell/Bash), test stack có PostgreSQL/Keycloak và CI dùng cùng lệnh. Đã chạy Unit 56 test và All 77 test thành công trong Docker; không dùng .env hoặc Python local. Phần việc tiếp theo sau bộ kiểm tra này là review và tích hợp hợp đồng với các nhánh Analysis/ML/frontend theo `docs/backend-integration-handoff.md`, chưa tự merge thay người phụ trách.
+
 **Cập nhật tiếp theo 17/11/2026:** đã triển khai JWT/JWKS RS256, Viewer/Admin, `/api/me`, Jobs API, khung chạy nền có khóa PostgreSQL và `service_runs`. Đã kiểm tra 75 test backend + 2 test Authorization Code/PKCE với Keycloak và API/service container thật. Hướng dẫn hiện tại: `docs/backend-auth-jobs.md`. Nghiệp vụ Analysis/ML vẫn là stub của các thành viên khác; runner báo failed đúng, chưa có luồng tái tạo Gold hoàn chỉnh hoặc frontend Auth.js. Những checklist nghiệm thu toàn đồ án ở dưới vẫn cần các module tương ứng để hoàn tất.
 
 - Repo: https://github.com/hieupt-ht/KPDL-NHOM-6

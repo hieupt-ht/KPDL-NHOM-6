@@ -301,6 +301,8 @@ Các service chỉ **nạp mô hình đã huấn luyện sẵn** từ `models/` 
 
 ### 6.1. Endpoint dữ liệu
 
+**Kiểm thử Backend bằng Docker:** PowerShell `./services/api/tests/run.ps1 -Mode All`, hoặc Bash `bash services/api/tests/run.sh all` (`unit`/`integration` để chạy từng phần). Bộ test dùng DB/Keycloak/mạng riêng, không cần Python/Node local hoặc `.env` và không chạm dữ liệu ứng dụng. Xem [hướng dẫn Docker](docs/backend-api-local.md) và [bàn giao tích hợp](docs/backend-integration-handoff.md). CI chạy cùng bộ test cho PR backend vào `develop`.
+
 API viết bằng FastAPI, chạy ở port `8000`, đọc từ Data Mart. Timeseries, trend, clusters và forecast nhận `start`/`end` (ISO 8601 có múi giờ); histogram/seasonal/correlation là snapshot nên chưa hỗ trợ khoảng thời gian tùy chọn. Xem hợp đồng API để biết phân trang và các mã lỗi.
 
 | Endpoint | Pattern |
