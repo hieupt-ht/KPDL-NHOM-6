@@ -15,17 +15,19 @@ $env:MART_DSN = 'postgresql://api_user:<API_DB_PASSWORD>@localhost:5433/<MART_DB
 
 Thay placeholder bằng cấu hình thật, URL encode ký tự đặc biệt trong DSN. Không commit mật khẩu. Các settings đọc environment của tiến trình; file .env không tự được nạp khi chạy trực tiếp bằng lệnh trên. Docker Compose vẫn lấy cấu hình từ .env theo cấu hình có sẵn.
 
+Nếu đã có `.env` cấu hình đầy đủ, thêm `--env-file .env` vào lệnh uvicorn để nạp cả JWT, token nội bộ và URL service local. Biến đã export trong PowerShell vẫn được ưu tiên. Khi kiểm tra xác thực, đặt `AUTH_ENABLED=true` theo `backend-auth-jobs.md`.
+
 - Swagger: http://localhost:8000/docs
 - Sống: `Invoke-RestMethod http://localhost:8000/health`
 - Mart sẵn sàng: `Invoke-RestMethod http://localhost:8000/ready`
 - Dữ liệu: `Invoke-RestMethod 'http://localhost:8000/api/timeseries?metric=http_traffic&granularity=day'`
 - Các bảng Gold cần được Analysis/ML ghi dữ liệu trước khi có kết quả thật. Không có dữ liệu trả 404 là hành vi dự kiến.
-- Timeout mặc định là 5 giây kết nối, 10000 ms truy vấn. Có thể export `DB_CONNECT_TIMEOUT_SECONDS` và `DB_STATEMENT_TIMEOUT_MS` khi chạy local. Compose hiện dùng mặc định; nếu muốn đổi qua .env cần bổ sung ánh xạ hai biến vào environment của API.
+- Timeout mặc định là 5 giây kết nối, 10000 ms truy vấn. Có thể export `DB_CONNECT_TIMEOUT_SECONDS` và `DB_STATEMENT_TIMEOUT_MS` khi chạy local. Compose đã ánh xạ cả hai biến timeout từ .env vào API.
 
 ## Unit test không cần DB
 
 ```powershell
-.venv/Scripts/python.exe -m pytest -c services/api/pytest.ini -m 'not integration' -q
+.venv/Scripts/python.exe -m pytest -c services/api/pytest.ini services/api/tests -m 'not integration' -q
 ```
 
 ## Integration test bằng PostgreSQL riêng
@@ -37,7 +39,7 @@ docker run --detach --rm --name cyber-radar-api-test-db --publish 127.0.0.1:5543
 docker exec cyber-radar-api-test-db pg_isready -U test_admin -d test_mart
 $env:TEST_MART_ADMIN_DSN = 'postgresql://test_admin:test-admin-only@127.0.0.1:55439/test_mart'
 $env:TEST_MART_API_DSN = 'postgresql://api_user:test-api-only@127.0.0.1:55439/test_mart'
-.venv/Scripts/python.exe -m pytest -c services/api/pytest.ini -q
+.venv/Scripts/python.exe -m pytest -c services/api/pytest.ini services/api/tests -q
 docker stop cyber-radar-api-test-db
 ```
 
@@ -51,4 +53,4 @@ Integration tests dọn các bảng Gold trước mỗi test. Chỉ trỏ TEST_M
 
 Kết quả kiểm tra ngày 17/11/2026: **30 test đạt**, gồm 18 test validation/lỗi/CORS và 12 integration test với PostgreSQL 16. Đã kiểm tra api_user có thể SELECT nhưng bị từ chối DELETE; transaction API là read-only. Smoke check health và OpenAPI đạt cho ingestion, analysis, clustering, prediction, api (scheduler tắt, chưa chạy tác vụ nghiệp vụ). Ruff kiểm tra mã thay đổi và định dạng đạt. Có một cảnh báo deprecation từ Starlette/AnyIO của môi trường test, không ảnh hưởng kết quả. Chưa chạy toàn bộ Docker Compose.
 
-JWT/SSO, Viewer/Admin, Jobs API và runner chưa triển khai trong giai đoạn này. Chưa nghiệm thu luồng Cloudflare thật → Gold → frontend. Không đánh dấu hoàn tất toàn bộ phần Định trong issue #2 chỉ dựa vào bộ kiểm thử API đọc.
+JWT/Keycloak, Viewer/Admin, Jobs API và runner đã được bổ sung; xem [hướng dẫn xác thực và job](backend-auth-jobs.md). Tài liệu kiểm thử 30 test ở trên ghi lại giai đoạn API đọc ban đầu. Chưa nghiệm thu luồng Cloudflare thật → Analysis/ML → Gold → frontend vì tác vụ Analysis/ML và tích hợp Auth.js vẫn do các thành viên tương ứng hoàn thiện.

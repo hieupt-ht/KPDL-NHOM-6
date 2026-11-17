@@ -1,4 +1,4 @@
-# Backend API: hợp đồng giai đoạn đọc Gold
+# Backend API: Gold, JWT/Keycloak và Jobs
 
 Đã triển khai trên nhánh `feature/backend-api`, nền `develop`. Các quyết định dưới đây là đề xuất cụ thể để Minh, Hoàng và Vũ cùng tích hợp; chưa có xác nhận của các thành viên. Schema Gold hiện có được giữ nguyên.
 
@@ -27,7 +27,8 @@
 | GET /api/forecast/continuous | start/end tùy chọn | `{target_date,predicted_value,model_name,created_at}` |
 | GET /api/forecast/discrete | start/end tùy chọn | `{target_date,label,probability,model_name,created_at}` |
 | GET /api/status | Không có bộ lọc thời gian | `{service_runs:[...],data_freshness:object hoặc null}` |
-| POST /api/jobs/{analysis\|clustering\|prediction}/run | Chưa triển khai trong giai đoạn này | Vẫn là stub 501; runner/service phải hoàn thiện ở giai đoạn tiếp theo |
+| GET /api/me | Bearer access token khi bật auth | `{username,roles,sub}`; development mode không có sub |
+| POST /api/jobs/{analysis\|clustering\|prediction}/run | Role admin | 202 `{service,run_id,status:"accepted"}`; 409 nếu đang chạy |
 
 Histogram, seasonal và correlation là snapshot được Analysis tính sẵn trên tập dữ liệu đầu vào. Gold chưa lưu cửa sổ tổng hợp nên nếu truyền start/end sẽ nhận **422**, không âm thầm bỏ bộ lọc. Status cũng từ chối start/end vì phản ánh trạng thái hiện tại. Các tham số này vẫn hiện trong Swagger để mô tả lỗi cho client cũ; cần bỏ chúng khỏi lời gọi frontend cho 4 endpoint này. Khi nhóm cần thống kê theo khoảng tùy chọn, phải thống nhất thay đổi cả Analysis và Gold trước.
 
@@ -47,10 +48,18 @@ Ví dụ:
 {"target_date":"2026-11-18","label":"Cao","probability":0.8,"model_name":"RandomForestClassifier","created_at":"2026-11-17T01:00:00Z"}
 ```
 
-## Xác thực và phần còn lại
+## Xác thực và chạy job
 
-Giai đoạn này chạy với `AUTH_ENABLED=false` theo bộ khung hiện có. Khi bật true, auth.py vẫn chưa có JWT và chưa thể dùng để nghiệm thu SSO. Không coi các API đọc đã chạy là bằng chứng xác thực/phân quyền đã hoàn tất.
+`AUTH_ENABLED=true` bật JWT RS256 từ Keycloak: kiểm tra chữ ký qua JWKS, issuer, audience `cyber-radar-api`, exp, iat, sub và token type Bearer. ID token/refresh token không dùng để gọi API. Viewer và Admin được đọc dữ liệu; chỉ Admin kích hoạt job. Thiếu token/sai token/hết hạn là 401 (WWW-Authenticate: Bearer), thiếu role là 403. JWKS không truy cập được trả 503. JWKS được cache 300 giây; kid mới kích hoạt tải lại khóa. Issuer luôn là URL công khai localhost:8080, còn API trong Docker đọc JWKS qua keycloak:8080.
 
-Bước kế tiếp: triển khai JWT/JWKS, require_user/require_admin, cấu hình audience/issuer và kiểm tra Viewer/Admin; sau đó hoàn thiện common.runner, nhật ký, chống job trùng và Jobs API, rồi tích hợp với Auth.js của Vũ.
+`AUTH_ENABLED=false` là development bypass, `/api/me` trả user development có cả viewer/admin. Không dùng chế độ này để nghiệm thu xác thực.
+
+Jobs API gửi POST tới URL nội bộ cố định, kèm `X-Job-Token` lấy từ `JOB_TRIGGER_TOKEN`. Service kiểm tra token kể cả khi auth tắt nếu đã cấu hình token; bật auth nhưng thiếu token nội bộ trả 503. Không dùng access token của người dùng làm token nội bộ. API không tự ghi Gold và không retry POST khi timeout: 504 yêu cầu client kiểm tra status trước khi bấm lại. Service không kết nối được trả 503; response sai hoặc upstream từ chối ngoài 409/503 trả 502, không chuyển tiếp nội dung lỗi nội bộ.
+
+Service trả 202 sau khi giữ khóa và tạo dòng `running` trong Gold, sau đó chạy nền. Theo dõi kết quả qua `/api/status`: `running`, `success`, `failed`, `partial`, `skipped` hoặc `interrupted`. 202 chỉ có nghĩa đã nhận, không có nghĩa tính toán thành công. Cả scheduler và manual Run dùng cùng khóa trong process và advisory lock PostgreSQL theo service; khác service có thể chạy song song. Lock được giữ bằng một kết nối Mart riêng đến hết job. Sau crash, lần chạy tiếp theo đánh dấu dòng running cũ là interrupted rồi tạo lần chạy mới. Nếu mất kết nối DB trong lúc chạy, service có thể không ghi được trạng thái kết thúc; cần xem log và lần khôi phục sau đó.
+
+`common.runner` là nơi duy nhất ghi `gold.service_runs` cho Analysis/Clustering/Prediction; các hàm tasks.run_all chỉ xử lý dữ liệu và không ghi thêm nhật ký. Chưa có timeout hủy tác vụ đang chạy hoặc job queue bền vững. Chạy một uvicorn worker/service là cấu hình hiện tại; không bật nhiều scheduler để tránh các lượt lịch lặp nối tiếp giữa worker.
+
+Các tác vụ Analysis/ML hiện vẫn là stub của thành viên khác. Run gọi được và ghi failed với `Job implementation is not available yet`; không giả lập kết quả thành công. Auth.js/dashboard do Vũ tích hợp tiếp với access token và role. Xem [hướng dẫn JWT/Keycloak và job](backend-auth-jobs.md).
 
 Nguồn kỹ thuật tham khảo: [Psycopg — query parameters](https://www.psycopg.org/psycopg3/docs/basic/params.html), [FastAPI — class dependencies](https://fastapi.tiangolo.com/tutorial/dependencies/classes-as-dependencies/).

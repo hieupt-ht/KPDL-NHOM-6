@@ -4,6 +4,7 @@ import logging
 from typing import Annotated
 
 import psycopg
+from auth import require_user
 from dependencies import get_mart
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,6 +35,11 @@ def database_error(request: Request, error: psycopg.Error):
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "api"}
+
+
+@app.get("/api/me", tags=["Authentication"])
+def me(user: Annotated[dict, Depends(require_user)]) -> dict:
+    return user
 
 
 @app.get("/ready")
