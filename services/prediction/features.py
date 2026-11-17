@@ -39,5 +39,5 @@ def build_features(hourly: pd.DataFrame, dropna: bool = True) -> pd.DataFrame:
     past = daily.shift(1)
     for w in WINDOWS:
         out[f"roll_mean_{w}"] = past.rolling(w, min_periods=w).mean()
-    out["dow"] = out.index.dayofweek
+    out["dow"] = out.index.day_of_week
     return out.dropna() if dropna else out

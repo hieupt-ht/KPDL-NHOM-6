@@ -57,7 +57,7 @@ def make_demo_hourly(days: int = 180, seed: int = SEED) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     ts = pd.date_range(end=pd.Timestamp.now(tz="UTC").floor("D"), periods=days * 24, freq="h")
     hour = ts.hour.to_numpy()
-    dow = ts.dayofweek.to_numpy()
+    dow = ts.day_of_week.to_numpy()
     t = np.arange(len(ts)) / 24
     value = (
         100

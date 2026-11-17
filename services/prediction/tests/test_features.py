@@ -14,7 +14,7 @@ def test_daily_and_lags():
     row = df.loc["2026-01-10"]
     assert row["value"] == 10 and row["lag_1"] == 9 and row["lag_7"] == 3
     assert row["roll_mean_3"] == 8.0  # mean(7,8,9), không gồm ngày 10
-    assert row["dow"] == pd.Timestamp("2026-01-10").dayofweek
+    assert row["dow"] == pd.Timestamp("2026-01-10").day_of_week
 
 
 def test_empty():
