@@ -7,6 +7,8 @@ from pathlib import Path
 import psycopg
 import pytest
 
+os.environ["SCHEDULER_ENABLED"] = "false"  # import main không được bật backfill nền
+
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
