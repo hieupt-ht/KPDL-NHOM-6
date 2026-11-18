@@ -38,6 +38,7 @@ node_modules/
 frontend/.next/
 frontend/out/
 frontend/build/
+frontend/.test-build/
 frontend/next-env.d.ts
 *.tsbuildinfo
 # Ảnh và công cụ chụp thử hiệu ứng biểu đồ, không phải mã frontend.

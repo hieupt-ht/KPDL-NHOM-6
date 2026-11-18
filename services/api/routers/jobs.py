@@ -1,12 +1,15 @@
 """Endpoint kích hoạt công việc thủ công."""
 
-from typing import Literal
+from typing import Annotated, Literal
 
 import httpx
 from auth import require_admin
 from common.config import settings
-from fastapi import APIRouter, Depends, HTTPException
+from dependencies import get_mart
+from fastapi import APIRouter, Depends, HTTPException, Path
+from psycopg import Connection
 from pydantic import BaseModel, ValidationError
+from schemas import ServiceRun
 
 router = APIRouter(dependencies=[Depends(require_admin)], tags=["Jobs"])
 
@@ -15,6 +18,20 @@ class AcceptedJob(BaseModel):
     service: Literal["analysis", "clustering", "prediction"]
     run_id: int
     status: Literal["accepted"]
+
+
+@router.get("/jobs/runs/{run_id}", response_model=ServiceRun)
+def get_job_run(
+    run_id: Annotated[int, Path(ge=1)],
+    connection: Annotated[Connection, Depends(get_mart)],
+):
+    row = connection.execute(
+        "SELECT id, service, started_at, finished_at, status, error FROM gold.service_runs WHERE id=%s",
+        (run_id,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(404, "Job run was not found")
+    return row
 
 
 @router.post("/jobs/{service}/run", status_code=202, response_model=AcceptedJob)

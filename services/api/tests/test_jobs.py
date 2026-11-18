@@ -94,3 +94,22 @@ def test_missing_internal_secret_when_auth_enabled(client, issuer, monkeypatch):
 
 def test_arbitrary_service_is_rejected(client):
     assert client.post("/api/jobs/other/run").status_code == 422
+
+
+def test_viewer_cannot_read_job_run(client, issuer):
+    response = client.get(
+        "/api/jobs/runs/1",
+        headers={"Authorization": "Bearer " + issuer["token"](["viewer"])},
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.integration
+def test_exact_job_run_and_missing_id(client, mart):
+    response = client.get("/api/jobs/runs/1")
+    assert response.status_code == 200
+    assert response.json()["id"] == 1
+    assert response.json()["service"] == "analysis"
+    assert response.json()["status"] == "success"
+    assert client.get("/api/jobs/runs/999999").status_code == 404
+    assert client.get("/api/jobs/runs/0").status_code == 422

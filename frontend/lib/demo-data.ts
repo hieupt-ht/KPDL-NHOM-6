@@ -50,12 +50,12 @@ export function histogram(metric: Metric, q: DateRange): HistogramBin[] {
 
 export function trend(q: DateRange & { granularity: "month" | "week"; metric: Metric }): TrendPoint[] {
   return timeseries(q).map((point, i, all) => ({ granularity: q.granularity, ts: point.ts, metric: q.metric,
-    trend_value: round(all.slice(Math.max(0, i - 2), i + 1).reduce((sum, p) => sum + p.mean, 0) / Math.min(3, i + 1)) }));
+    trend_value: round(all.slice(Math.max(0, i - 2), i + 1).reduce((sum, p) => sum + p.mean!, 0) / Math.min(3, i + 1)) }));
 }
 
 export function seasonal(q: { period_type: "hour_of_day" | "day_of_week" | "month"; metric: Metric }): SeasonalPoint[] {
   const count = q.period_type === "hour_of_day" ? 24 : q.period_type === "day_of_week" ? 7 : 12;
-  return Array.from({ length: count }, (_, bucket) => ({ metric: q.metric, period_type: q.period_type, bucket,
+  return Array.from({ length: count }, (_, bucket) => ({ metric: q.metric, period_type: q.period_type, bucket: q.period_type === "month" ? bucket + 1 : bucket,
     value: round(clamp(value(q.metric, -bucket) + Math.sin(bucket * .51 - 1.4) * (q.metric.endsWith("share") ? 4 : .075), 0, q.metric.endsWith("share") ? 100 : 1)) }));
 }
 

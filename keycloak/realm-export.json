@@ -17,7 +17,7 @@
       "directAccessGrantsEnabled": false,
       "redirectUris": ["http://localhost:3000/api/auth/callback/keycloak"],
       "webOrigins": ["http://localhost:3000"],
-      "attributes": {"pkce.code.challenge.method": "S256"},
+      "attributes": {"pkce.code.challenge.method": "S256", "post.logout.redirect.uris": "http://localhost:3000/"},
       "protocolMappers": [
         {
           "name": "api-audience", "protocol": "openid-connect",
