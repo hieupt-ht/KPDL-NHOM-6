@@ -101,6 +101,9 @@ services:
       MART_DSN: postgresql://logic_user:${LOGIC_DB_PASSWORD}@mart-db:5432/${MART_DB}
       CLUSTERING_CRON_HOUR: ${CLUSTERING_CRON_HOUR:-0}
       CLUSTERING_CRON_MINUTE: ${CLUSTERING_CRON_MINUTE:-30}
+      MODELS_DIR: /app/models
+    volumes:
+      - ./models:/app/models:ro
     ports: ["8002:8002"]
     depends_on:
       warehouse-db: {condition: service_healthy}
