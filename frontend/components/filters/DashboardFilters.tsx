@@ -2,6 +2,7 @@
 import { useState } from "react";
 import type { Metric } from "@/types/api";
 import { DATA_MODE } from "@/lib/api";
+import { vietnamDay } from "@/lib/date-utils";
 
 export const metricLabels: Record<Metric, string> = {
   http_traffic: "Lưu lượng HTTP", l7_attack: "Tấn công L7", bot_share: "Tỷ lệ bot",
@@ -17,7 +18,7 @@ function daysAgo(days: number, end: string) {
 }
 export function useDashboardFilters(defaultMetric: Metric = "http_traffic") {
   const [filters, setFilters] = useState<Filters>(() => {
-    const end = DATA_MODE === "demo" ? "2026-11-17" : new Date().toISOString().slice(0, 10);
+    const end = DATA_MODE === "demo" ? "2026-11-17" : vietnamDay(new Date());
     return { start: daysAgo(30, end), end, metric: defaultMetric, granularity: "day" };
   });
   return { filters, setFilters, preset(days: number) { setFilters(f => ({ ...f, start: daysAgo(days, f.end) })); } };

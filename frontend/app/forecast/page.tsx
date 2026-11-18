@@ -1,10 +1,11 @@
 "use client";
 import { useState } from "react";
+import { vietnamDay } from "@/lib/date-utils";
 import useSWR from "swr";
 import type { EChartsOption } from "echarts";
 import DataChart, { chartBase, colors } from "@/components/charts/DataChart";
 import DashboardFilters, { useDashboardFilters } from "@/components/filters/DashboardFilters";
-import { Chip, DataState, formatDate, formatIndex, PageHeading, Panel, SourceNote } from "@/components/ui/Elements";
+import { Chip, DataState, formatDate, formatIndex, formatProbability, PageHeading, Panel, SourceNote } from "@/components/ui/Elements";
 import { DATA_REFRESH_INTERVAL, getClusters, getForecastContinuous, getForecastDiscrete, getTimeseries } from "@/lib/api";
 
 const refreshInterval = DATA_REFRESH_INTERVAL;
@@ -26,13 +27,13 @@ export default function ForecastPage() {
     xAxis: { type: "category", data: clusters.data?.map(row => row.date.slice(5).split("-").reverse().join("/")) ?? [] },
     yAxis: { type: "value", min: 0, name: "Chỉ số HTTP" },
     tooltip: { trigger: "item", formatter: "{b}<br/>HTTP: {c}" },
-    series: [{ type: "bar", barMaxWidth: 23, data: clusters.data?.map(row => ({ value: row.features.http_mean ?? 0, itemStyle: { color: clusterColors[row.cluster_name] ?? c.http, borderRadius: [3, 3, 0, 0] } })) ?? [] }],
+    series: [{ type: "bar", barMaxWidth: 23, data: clusters.data?.map(row => ({ value: row.features?.http_mean ?? null, itemStyle: { color: clusterColors[row.cluster_name] ?? c.http, borderRadius: [3, 3, 0, 0] } })) ?? [] }],
   }, true);
   const nextDay = forecast.data?.target_date.slice(5).split("-").reverse().join("/");
   const observed = history.data?.map(row => row.mean) ?? [];
   const historyOption: EChartsOption = chartBase({
     legend: { top: 0, right: 0 },
-    xAxis: { type: "category", data: [...(history.data?.map(row => row.ts.slice(5, 10).split("-").reverse().join("/")) ?? []), ...(nextDay ? [nextDay] : [])] },
+    xAxis: { type: "category", data: [...(history.data?.map(row => vietnamDay(row.ts).slice(5, 10).split("-").reverse().join("/")) ?? []), ...(nextDay ? [nextDay] : [])] },
     yAxis: { type: "value", min: 0, name: "Chỉ số HTTP" },
     series: [{ name: "Đã quan sát", type: "line", smooth: .2, showSymbol: false, itemStyle: { color: c.http }, lineStyle: { width: 3 }, data: observed },
       ...(forecast.data && observed.length ? [{ name: "Dự báo", type: "line" as const, itemStyle: { color: "#6366F1" }, lineStyle: { type: "dashed" as const, width: 2 }, symbolSize: 9,
@@ -45,7 +46,7 @@ export default function ForecastPage() {
         <DataState loading={forecast.isLoading} error={forecast.error} empty={!forecast.data}><div className="forecast-row"><div className="forecast-number">{formatIndex(forecast.data?.predicted_value)}</div><div><strong>{forecast.data?.model_name}</strong><p className="panel-subtitle">Cập nhật: {formatDate(forecast.data?.created_at)}</p></div></div><p className="panel-subtitle">Giá trị mô hình dự đoán, không phải số request tuyệt đối.</p></DataState>
       </Panel>
       <Panel title="Phân loại rủi ro ngày mai" subtitle="Xác suất do mô hình phân loại ước lượng">
-        <DataState loading={risk.isLoading} error={risk.error} empty={!risk.data}><div className="forecast-row"><Chip tone={currentRisk ? "danger" : "normal"}>RỦI RO {risk.data?.label.toUpperCase()}</Chip><strong className={currentRisk ? "tone-danger" : "tone-normal"} style={{ fontSize: 40 }}>{Math.round((risk.data?.probability ?? 0) * 100)}%</strong></div><div className="risk-track"><span style={{ width: `${Math.round((risk.data?.probability ?? 0) * 100)}%` }}/></div><p className="panel-subtitle">{risk.data?.model_name}</p></DataState>
+        <DataState loading={risk.isLoading} error={risk.error} empty={!risk.data}><div className="forecast-row"><Chip tone={currentRisk ? "danger" : "normal"}>RỦI RO {(risk.data?.label?.toUpperCase() ?? "CHƯA CÓ")}</Chip><strong className={currentRisk ? "tone-danger" : "tone-normal"} style={{ fontSize: 40 }}>{formatProbability(risk.data?.probability)}</strong></div><div className="risk-track">{risk.data?.probability != null && <span style={{ width: formatProbability(risk.data.probability) }}/>}</div><p className="panel-subtitle">{risk.data?.model_name}</p></DataState>
       </Panel>
     </div>
     <h2 className="section-title">Trạng thái theo ngày</h2>
@@ -58,7 +59,7 @@ export default function ForecastPage() {
       <Panel title="Chi tiết trạng thái" subtitle={active ? `Ngày ${formatDate(active.date)}` : "Chưa chọn ngày"}>
         <DataState loading={clusters.isLoading} error={clusters.error} empty={!active}>
           <div style={{ margin: "25px 0" }}><Chip tone={tone(active?.cluster_name ?? "")}>{active?.cluster_name ?? "—"}</Chip></div>
-          <div className="facts"><div className="fact"><span>Lưu lượng trung bình</span><strong>{formatIndex(active?.features.http_mean)}</strong></div><div className="fact"><span>L7 cao nhất</span><strong>{formatIndex(active?.features.l7_max)}</strong></div><div className="fact"><span>Bot trung bình</span><strong>{formatIndex(active?.features.bot_mean)}%</strong></div></div>
+          <div className="facts"><div className="fact"><span>Lưu lượng trung bình</span><strong>{formatIndex(active?.features?.http_mean)}</strong></div><div className="fact"><span>L7 cao nhất</span><strong>{formatIndex(active?.features?.l7_max)}</strong></div><div className="fact"><span>Bot trung bình</span><strong>{formatIndex(active?.features?.bot_mean)}%</strong></div></div>
           <p className="panel-subtitle" style={{ marginTop: 28 }}>Các đặc trưng lấy từ kết quả phân cụm của Data Mart. Tên cụm mô tả trạng thái dữ liệu, không xác nhận sự cố.</p>
         </DataState>
       </Panel>

@@ -1,5 +1,7 @@
 # Bàn giao tích hợp Backend/API — Định
 
+**Cập nhật 18/11/2026:** develop `c42997c` đã merge PR #7 (training/features) và #8 (UI). Nhánh `codex/backend-dashboard-integration` thực hiện các điểm frontend dưới đây: phiên NextAuth/Keycloak, refresh/quyền, bộ lọc/snapshot/null/phân trang và theo dõi đúng run ID. Xem [hướng dẫn tích hợp hiện tại](frontend-live-integration.md). Bảng và danh sách ngày 17/11 bên dưới là mốc bàn giao trước thay đổi này. Analysis và inference ML chưa triển khai đầy đủ trên develop; không coi integration test là nghiệm thu thuật toán.
+
 ## Trạng thái đã đối chiếu
 
 Ngày 17/11/2026: `develop` tại `5787e9b` đã có Ingestion và CLAUDE.md. Nhánh `feature/backend-api` đã merge cập nhật develop này, giữ nguyên phần API/JWT/jobs ở PR #4. Các nhánh của thành viên khác chỉ được đọc để đối chiếu, chưa được merge vào nhánh backend hoặc develop.

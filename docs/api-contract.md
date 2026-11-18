@@ -27,6 +27,7 @@
 | GET /api/forecast/continuous | start/end tùy chọn | `{target_date,predicted_value,model_name,created_at}` |
 | GET /api/forecast/discrete | start/end tùy chọn | `{target_date,label,probability,model_name,created_at}` |
 | GET /api/status | Không có bộ lọc thời gian | `{service_runs:[...],data_freshness:object hoặc null}` |
+| GET /api/jobs/runs/{run_id} | Role admin; run_id >= 1 | Một ServiceRun; 404 nếu không tồn tại; dùng để theo dõi ID nhận từ 202 |
 | GET /api/me | Bearer access token khi bật auth | `{username,roles,sub}`; development mode không có sub |
 | POST /api/jobs/{analysis\|clustering\|prediction}/run | Role admin | 202 `{service,run_id,status:"accepted"}`; 409 nếu đang chạy |
 

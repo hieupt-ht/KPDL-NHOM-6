@@ -1,69 +1,58 @@
-import type {
-  ClusterResult, CorrelationPoint, DateRange, ForecastContinuous, ForecastDiscrete,
-  HistogramBin, Metric, SeasonalPoint, StatusResponse, TimeseriesPoint, TrendPoint,
-} from "@/types/api";
+import { getSession } from "next-auth/react";
+import type { Session } from "next-auth";
+import type { AcceptedJob, ClusterResult, CorrelationPoint, DateRange, ForecastContinuous, ForecastDiscrete, HistogramBin, Metric, SeasonalPoint, ServiceRun, StatusResponse, TimeseriesPoint, TrendPoint } from "@/types/api";
 import * as demo from "@/lib/demo-data";
+import { ApiError, createApiTransport } from "./api-core";
 
+export { ApiError } from "./api-core";
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 export const DATA_MODE = process.env.NEXT_PUBLIC_DATA_MODE === "api" ? "api" : "demo";
-// Demo revalidates often to show one changing sample; production checks the API every five minutes.
 export const DATA_REFRESH_INTERVAL = DATA_MODE === "demo" ? 8_000 : 300_000;
+let sessionRequest: Promise<Session | null> | undefined;
 
-// Replace with the Keycloak access token from Auth.js when SSO is integrated.
-// The role preview switch in the UI is not authentication.
-export function getAccessToken(): string | null { return null; }
-
-function url(path: string, query: Record<string, string | undefined> = {}) {
-  const u = new URL(`/api/${path}`, API_BASE_URL);
-  Object.entries(query).forEach(([key, value]) => { if (value) u.searchParams.set(key, value); });
-  return u.toString();
-}
-
-async function request<T>(path: string, query?: Record<string, string | undefined>, init?: RequestInit): Promise<T> {
-  const token = getAccessToken();
-  const response = await fetch(url(path, query), {
-    ...init,
-    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...init?.headers },
-  });
-  if (!response.ok) {
-    const message = response.status === 501 ? "API này đang được nhóm backend hoàn thiện." :
-      response.status === 404 ? "Data Mart chưa có dữ liệu cho lựa chọn này." :
-      response.status === 401 || response.status === 403 ? "Bạn chưa có quyền truy cập dữ liệu này." :
-      `Không tải được dữ liệu (HTTP ${response.status}).`;
-    throw new Error(message);
+export function clearAuthCache() { sessionRequest = undefined; }
+export async function getAccessToken(): Promise<string | null> {
+  if (!sessionRequest) {
+    const pending = getSession();
+    sessionRequest = pending;
+    void pending.finally(() => { if (sessionRequest === pending) sessionRequest = undefined; }).catch(() => {});
   }
-  const body = await response.text();
-  return (body ? JSON.parse(body) : undefined) as T;
+  const session = await sessionRequest;
+  return session?.error ? null : session?.accessToken ?? null;
 }
+const api = createApiTransport({ baseUrl: API_BASE_URL, getToken: getAccessToken });
 
 export function getTimeseries(q: DateRange & { granularity: "day" | "week" | "month"; metric: Metric }): Promise<TimeseriesPoint[]> {
-  return DATA_MODE === "demo" ? Promise.resolve(demo.timeseries(q)) : request("timeseries", q);
+  return DATA_MODE === "demo" ? Promise.resolve(demo.timeseries(q)) : api.list("timeseries", { ...api.range(q), metric: q.metric, granularity: q.granularity });
 }
 export function getHistogram(q: DateRange & { metric: Metric }): Promise<HistogramBin[]> {
-  return DATA_MODE === "demo" ? Promise.resolve(demo.histogram(q.metric, q)) : request("histogram", q);
+  return DATA_MODE === "demo" ? Promise.resolve(demo.histogram(q.metric, q)) : api.request("histogram", { metric: q.metric });
 }
 export function getTrend(q: DateRange & { granularity: "month" | "week"; metric: Metric }): Promise<TrendPoint[]> {
-  return DATA_MODE === "demo" ? Promise.resolve(demo.trend(q)) : request("trend", q);
+  return DATA_MODE === "demo" ? Promise.resolve(demo.trend(q)) : api.request("trend", { ...api.range(q), metric: q.metric, granularity: q.granularity });
 }
 export function getSeasonal(q: DateRange & { period_type: "hour_of_day" | "day_of_week" | "month"; metric: Metric }): Promise<SeasonalPoint[]> {
-  return DATA_MODE === "demo" ? Promise.resolve(demo.seasonal(q)) : request("seasonal", q);
+  return DATA_MODE === "demo" ? Promise.resolve(demo.seasonal(q)) : api.request("seasonal", { period_type: q.period_type, metric: q.metric });
 }
 export function getCorrelation(q: DateRange = {}): Promise<CorrelationPoint[]> {
-  return DATA_MODE === "demo" ? Promise.resolve(demo.correlation(q)) : request("correlation", q);
+  return DATA_MODE === "demo" ? Promise.resolve(demo.correlation(q)) : api.request("correlation");
 }
 export function getClusters(q: DateRange = {}): Promise<ClusterResult[]> {
-  return DATA_MODE === "demo" ? Promise.resolve(demo.clusters(q)) : request("clusters", q);
+  return DATA_MODE === "demo" ? Promise.resolve(demo.clusters(q)) : api.list("clusters", api.range(q));
 }
 export function getForecastContinuous(q: DateRange = {}): Promise<ForecastContinuous> {
-  return DATA_MODE === "demo" ? Promise.resolve(demo.forecastContinuous()) : request("forecast/continuous", q);
+  return DATA_MODE === "demo" ? Promise.resolve(demo.forecastContinuous()) : api.request("forecast/continuous", api.range(q));
 }
 export function getForecastDiscrete(q: DateRange = {}): Promise<ForecastDiscrete> {
-  return DATA_MODE === "demo" ? Promise.resolve(demo.forecastDiscrete()) : request("forecast/discrete", q);
+  return DATA_MODE === "demo" ? Promise.resolve(demo.forecastDiscrete()) : api.request("forecast/discrete", api.range(q));
 }
-export function getStatus(q: DateRange = {}): Promise<StatusResponse> {
-  return DATA_MODE === "demo" ? Promise.resolve(demo.status()) : request("status", q);
+export function getStatus(): Promise<StatusResponse> {
+  return DATA_MODE === "demo" ? Promise.resolve(demo.status()) : api.request("status");
 }
-export async function runJob(service: "analysis" | "clustering" | "prediction"): Promise<void> {
-  if (DATA_MODE === "demo") throw new Error("Chế độ minh họa không chạy job thật.");
-  await request<unknown>(`jobs/${service}/run`, undefined, { method: "POST" });
+export async function runJob(service: "analysis" | "clustering" | "prediction"): Promise<AcceptedJob> {
+  if (DATA_MODE === "demo") throw new ApiError(400, "Chế độ minh họa không chạy job thật.");
+  return api.request(`jobs/${service}/run`, undefined, { method: "POST" });
+}
+export function getJobRun(id: number): Promise<ServiceRun> {
+  return api.request(`jobs/runs/${id}`);
 }

@@ -1,11 +1,12 @@
 "use client";
+import { vietnamDay } from "@/lib/date-utils";
 import { useState } from "react";
 import useSWR from "swr";
 import type { EChartsOption } from "echarts";
 import DataChart, { chartBase, colors } from "@/components/charts/DataChart";
 import DashboardFilters, { metricLabels, metricUnit, useDashboardFilters } from "@/components/filters/DashboardFilters";
 import { DataState, PageHeading, Panel, SourceNote } from "@/components/ui/Elements";
-import { DATA_REFRESH_INTERVAL, getClusters, getCorrelation, getHistogram, getSeasonal, getTimeseries, getTrend } from "@/lib/api";
+import { DATA_MODE, DATA_REFRESH_INTERVAL, getClusters, getCorrelation, getHistogram, getSeasonal, getTimeseries, getTrend } from "@/lib/api";
 
 const refreshInterval = DATA_REFRESH_INTERVAL;
 const dateLabel = (s: string) => new Intl.DateTimeFormat("vi-VN", { day: "2-digit", month: "2-digit", timeZone: "Asia/Ho_Chi_Minh" }).format(new Date(s));
@@ -29,10 +30,10 @@ export default function AnalysisPage() {
   const color = filters.metric === "l7_attack" ? c.l7 : filters.metric === "bot_share" ? c.bot : filters.metric === "human_share" ? c.human : filters.metric === "netflows" ? c.netflow : c.http;
   const dayMap = new Map(clusters.data?.map(row => [row.date, row.cluster_name]));
   const botMap = new Map(bot.data?.map(row => [row.ts, row.mean]));
-  const scatterGroups = ["Bình thường", "Cao điểm", "Bất thường"].map(name => ({ name, type: "scatter" as const, symbolSize: 10,
-    itemStyle: { color: name === "Bất thường" ? c.l7 : name === "Cao điểm" ? c.bot : c.human },
-    data: scatterTraffic.data?.filter(point => (dayMap.get(point.ts.slice(0, 10)) ?? "Bình thường") === name && botMap.has(point.ts))
-      .map(point => [point.mean, botMap.get(point.ts) ?? 0]) ?? [] }));
+  const scatterGroups = ["Bình thường", "Cao điểm", "Bất thường", "Chưa phân cụm"].map(name => ({ name, type: "scatter" as const, symbolSize: 10,
+    itemStyle: { color: name === "Bất thường" ? c.l7 : name === "Cao điểm" ? c.bot : name === "Bình thường" ? c.human : "#94A3B8" },
+    data: scatterTraffic.data?.filter(point => (dayMap.get(vietnamDay(point.ts)) ?? "Chưa phân cụm") === name && point.mean != null && botMap.get(point.ts) != null)
+      .map(point => [point.mean!, botMap.get(point.ts)!]) ?? [] }));
   const timeOption: EChartsOption = chartBase({
     xAxis: { type: "category", data: time.data?.map(p => dateLabel(p.ts)) ?? [] },
     yAxis: { type: "value", min: 0, name: metricUnit(filters.metric) },
@@ -52,7 +53,7 @@ export default function AnalysisPage() {
       { name: "Xu hướng", type: "line", data: trend.data?.map(p => p.trend_value) ?? [], itemStyle: { color: c.trend }, lineStyle: { type: "dashed", width: 2 }, showSymbol: false },
     ],
   }, true);
-  const seasonalLabels = seasonal.data?.map(p => period === "hour_of_day" ? `${String(p.bucket).padStart(2, "0")}:00` : period === "day_of_week" ? ["T2", "T3", "T4", "T5", "T6", "T7", "CN"][p.bucket] : `T${p.bucket + 1}`) ?? [];
+  const seasonalLabels = seasonal.data?.map(p => period === "hour_of_day" ? `${String(p.bucket).padStart(2, "0")}:00` : period === "day_of_week" ? ["T2", "T3", "T4", "T5", "T6", "T7", "CN"][p.bucket] : `T${p.bucket}`) ?? [];
   const seasonalOption: EChartsOption = chartBase({ xAxis: { type: "category", data: seasonalLabels }, yAxis: { type: "value", min: 0, name: metricUnit(filters.metric) },
     series: [{ type: "line", smooth: .32, data: seasonal.data?.map(p => p.value) ?? [], itemStyle: { color }, showSymbol: false, lineStyle: { width: 3 } }] });
   const scatterOption: EChartsOption = chartBase({ legend: { top: 0, right: 0 }, tooltip: { trigger: "item" },
@@ -62,12 +63,12 @@ export default function AnalysisPage() {
   const heatOption: EChartsOption = chartBase({ grid: { left: 85, right: 45, top: 25, bottom: 50 }, tooltip: { trigger: "item" },
     xAxis: { type: "category", data: short, splitArea: { show: true } }, yAxis: { type: "category", data: short, splitArea: { show: true } },
     visualMap: { min: -1, max: 1, calculable: false, orient: "horizontal", bottom: 0, left: "center", inRange: { color: [c.neg, "#FCA5A5", "#F1F5F9", "#67C8DD", c.pos] } },
-    series: [{ type: "heatmap", data: correlation.data?.map(p => [labels.indexOf(p.var_x), labels.indexOf(p.var_y), p.coef]) ?? [], label: { show: true, formatter: (p: { value?: unknown }) => Array.isArray(p.value) ? Number(p.value[2]).toFixed(2) : "" } }],
+    series: [{ type: "heatmap", data: correlation.data?.filter(p => p.coef !== null).map(p => [labels.indexOf(p.var_x), labels.indexOf(p.var_y), p.coef]) ?? [], label: { show: true, formatter: (p: { value?: unknown }) => Array.isArray(p.value) ? Number(p.value[2]).toFixed(2) : "" } }],
   });
   return <>
     <PageHeading eyebrow="Khám phá dữ liệu" title="Phân tích dữ liệu">Đối chiếu chuỗi thời gian, phân phối, xu hướng, mùa vụ và tương quan giữa các chỉ số.</PageHeading>
     <DashboardFilters filters={filters} setFilters={setFilters} />
-    <p className="notice"><strong>Cách đọc:</strong> HTTP, L7 và Netflow là chỉ số tương đối; Bot và Human là tỷ lệ %. Biểu đồ dùng dữ liệu từ Data Mart theo bộ lọc đã chọn.</p>
+    <p className="notice"><strong>Cách đọc:</strong> HTTP, L7 và Netflow là chỉ số tương đối; Bot và Human là tỷ lệ %. {DATA_MODE === "api" ? "Histogram, mùa vụ và tương quan dùng toàn bộ tập dữ liệu phân tích. Bộ lọc ngày áp dụng cho chuỗi thời gian, xu hướng và phân cụm." : "Đang xem dữ liệu minh họa theo bộ lọc."}</p>
     <div className="grid-half">
       <Panel title="01 · Chuỗi thời gian" subtitle={`${metricLabels[filters.metric]} · ${metricUnit(filters.metric)} · có zoom`}><DataState loading={time.isLoading} error={time.error} empty={!time.data?.length}><DataChart option={timeOption}/></DataState></Panel>
       <Panel title="02 · Phân phối giá trị" subtitle="Histogram · 20 khoảng giá trị"><DataState loading={hist.isLoading} error={hist.error} empty={!hist.data?.length}><DataChart option={histOption}/></DataState></Panel>

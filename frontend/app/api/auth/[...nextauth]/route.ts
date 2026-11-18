@@ -1,3 +1,17 @@
-// TODO: Cấu hình Auth.js Keycloak provider và xuất GET/POST handler sau khi triển khai SSO.
-export async function GET() { return new Response("Not implemented yet", { status: 501 }); }
-export async function POST() { return new Response("Not implemented yet", { status: 501 }); }
+import NextAuth from "next-auth";
+import type { NextRequest } from "next/server";
+import { getAuthOptions } from "@/lib/auth-options";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+async function handler(request: NextRequest, context: { params: Promise<{ nextauth: string[] }> }) {
+  try {
+    const params = await context.params;
+    return await NextAuth(request, { params }, getAuthOptions());
+  } catch {
+    return Response.json({ error: "Authentication is unavailable" }, { status: 503 });
+  }
+}
+
+export { handler as GET, handler as POST };

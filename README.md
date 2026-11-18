@@ -316,6 +316,7 @@ API viết bằng FastAPI, chạy ở port `8000`, đọc từ Data Mart. Timese
 | `GET /api/forecast/continuous` | Dự báo chỉ số lưu lượng ngày mai |
 | `GET /api/forecast/discrete` | Nhãn rủi ro ngày mai |
 | `GET /api/status` | Lần chạy gần nhất của từng service và độ mới của dữ liệu |
+| `GET /api/jobs/runs/{run_id}` | Theo dõi chính xác một lần chạy (cần role `admin`) |
 | `GET /api/me` | Username, sub và role của người dùng đã xác thực |
 | `POST /api/jobs/{analysis\|clustering\|prediction}/run` | Kích hoạt Business Logic (cần role `admin`) |
 
