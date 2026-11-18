@@ -30,8 +30,8 @@ export default function AdminPage() {
         const row = await getJobRun(pending!.run_id);
         if (stopped) return;
         setTracked(old => [row, ...old.filter(item => item.id !== row.id)]);
-        await mutate();
-        if (stopped) return;
+        // A failure loading the summary must not hide a known terminal result.
+        void mutate().catch(() => {});
         if (row.status !== "running") {
           setPending(null);
           setFeedback(`Lần chạy #${row.id}: ${statusLabel(row.status)}.${row.error ? ` ${row.error}` : ""}`);
@@ -71,7 +71,7 @@ export default function AdminPage() {
       </section>;
     })}</div>
     {feedback && <p className="job-feedback" role="status">{feedback}</p>}
-    {pending && <button className="button" onClick={() => { setPending(null); setFeedback("Đã dừng theo dõi. Tác vụ vẫn tiếp tục ở backend."); }}>Dừng theo dõi</button>}
+    {pending && <button className="button" onClick={() => { setTracked(old => old.filter(row => row.id !== pending.run_id)); setPending(null); void mutate().catch(() => {}); setFeedback("Đã dừng theo dõi. Tác vụ vẫn tiếp tục ở backend."); }}>Dừng theo dõi</button>}
     <div className="grid-half"><Panel title="Tình trạng dữ liệu" subtitle="Kết quả và độ mới đọc từ Gold">
       <DataState loading={isLoading} error={error} empty={!data}><div className="facts" style={{ marginTop: 24 }}>
         <div className="fact"><span>Kết quả phân tích</span><Chip tone={data?.data_freshness ? "normal" : "peak"}>{data?.data_freshness ? "Đã có mốc cập nhật" : "Chưa có mốc cập nhật"}</Chip></div>
