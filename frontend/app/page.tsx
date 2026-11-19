@@ -1,4 +1,5 @@
 "use client";
+import { riskSummary } from "@/lib/ml-contract";
 import { vietnamDay } from "@/lib/date-utils";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -6,7 +7,7 @@ import useSWR from "swr";
 import type { EChartsOption } from "echarts";
 import DataChart, { chartBase, colors } from "@/components/charts/DataChart";
 import DashboardFilters, { useDashboardFilters } from "@/components/filters/DashboardFilters";
-import { Chip, DataState, formatDate, formatDateTime, formatTimeWithSeconds, formatIndex, formatProbability, Kpi, PageHeading, Panel, SourceNote } from "@/components/ui/Elements";
+import { Chip, DataState, formatDate, formatDateTime, formatTimeWithSeconds, formatIndex, Kpi, PageHeading, Panel, SourceNote } from "@/components/ui/Elements";
 import { DATA_MODE, DATA_REFRESH_INTERVAL, getClusters, getForecastContinuous, getForecastDiscrete, getStatus, getTimeseries } from "@/lib/api";
 
 const refreshInterval = DATA_REFRESH_INTERVAL;
@@ -90,7 +91,7 @@ export default function Home() {
       <Kpi label="Chỉ số lưu lượng" value={formatIndex(latestHttp)} note="Giá trị tương đối, không phải số request" tone="tone-primary" />
       <Kpi label="Chỉ số tấn công L7" value={formatIndex(latestL7)} note="Theo khoảng thời gian đang chọn" tone="tone-danger" />
       <Kpi label="Tỷ lệ bot" value={latestBot == null ? "—" : `${formatIndex(latestBot)}%`} note="Trong lưu lượng HTTP" />
-      <Kpi label="Rủi ro ngày mai" value={risk.data ? `${risk.data.label ?? "Chưa có"} · ${formatProbability(risk.data.probability)}` : "—"} note="Dự báo mới nhất, không thuộc mốc phát lại" tone={isHigh ? "tone-danger" : "tone-normal"} />
+      <Kpi label="Rủi ro ngày mai" value={risk.data ? riskSummary(risk.data) : "—"} note="Dự báo mới nhất, không thuộc mốc phát lại" tone={isHigh ? "tone-danger" : "tone-normal"} />
     </div>
     <div className="grid-main">
       <Panel title="Lưu lượng & tấn công theo thời gian" subtitle="Chỉ số tương đối · Kéo thanh dưới hoặc cuộn trên biểu đồ để zoom">
@@ -123,7 +124,7 @@ export default function Home() {
       </Panel>
       <Panel title="Dự báo ngày mai" subtitle="Dự báo tương đối và xác suất rủi ro từ mô hình">
         <DataState loading={forecast.isLoading || risk.isLoading} error={forecast.error || risk.error} empty={!forecast.data || !risk.data}>
-          <div className="forecast-row"><div><div className="forecast-number">{formatIndex(forecast.data?.predicted_value)}</div><span className="panel-subtitle">Chỉ số lưu lượng dự báo</span></div><Chip tone={isHigh ? "danger" : "normal"}>RỦI RO {(risk.data?.label?.toUpperCase() ?? "CHƯA CÓ")} · {formatProbability(risk.data?.probability)}</Chip></div>
+          <div className="forecast-row"><div><div className="forecast-number">{formatIndex(forecast.data?.predicted_value)}</div><span className="panel-subtitle">Chỉ số lưu lượng dự báo</span></div><Chip tone={isHigh ? "danger" : "normal"}>RỦI RO {riskSummary(risk.data)}</Chip></div>
           <Link href="/forecast" className="button">Xem dự báo & phân cụm →</Link>
         </DataState>
       </Panel>

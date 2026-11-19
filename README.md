@@ -45,7 +45,7 @@
 - Dashboard web có đăng nhập SSO, zoom và filter.
 - **Ngoài phạm vi:** không chặn IP và không can thiệp tường lửa.
 
-> **Về bản chất dữ liệu:** Cloudflare Radar **không trả về số request tuyệt đối**. Giá trị đã được chuẩn hóa (`MIN0_MAX` ra thang 0–1, các endpoint dạng nhóm ra tỉ lệ %). Vì vậy hệ thống dùng khái niệm **"chỉ số lưu lượng"** và **"tỉ lệ %"**.
+> **Về bản chất dữ liệu:** Cloudflare Radar **không trả về số request tuyệt đối**. Giá trị được chuẩn hóa `MIN0_MAX` **theo từng cửa sổ truy vấn** (các endpoint dạng nhóm ra tỉ lệ %). Ingestion nối các cửa sổ về cùng một thang tương đối (xem mục 3.5), nên giá trị trong Silver **có thể lớn hơn 1**. Vì vậy hệ thống dùng khái niệm **"chỉ số lưu lượng"** và **"tỉ lệ %"**.
 
 ---
 
@@ -134,10 +134,10 @@ Tất cả truy vấn dùng `location=VN`, `aggInterval=1h` và `format=json`. B
 
 | Mã chỉ số (`metric`) | Ý nghĩa | Endpoint |
 | :--- | :--- | :--- |
-| `http_traffic` | Chỉ số lưu lượng HTTP (0–1) | `GET /radar/http/timeseries` |
-| `l7_attack` | Chỉ số tấn công Layer 7 | `GET /radar/attacks/layer7/timeseries` |
-| `bot_share`, `human_share` | Tỉ lệ % bot và người dùng thật | `GET /radar/http/timeseries_groups/bot_class` |
-| `netflows` | Chỉ số lưu lượng mạng tổng | `GET /radar/netflows/timeseries` |
+| `http_traffic` | Chỉ số lưu lượng HTTP (thang tương đối, có thể > 1) | `GET /radar/http/timeseries` |
+| `l7_attack` | Chỉ số tấn công Layer 7 (thang tương đối) | `GET /radar/attacks/layer7/timeseries` |
+| `bot_share`, `human_share` | Tỉ lệ % bot và người dùng thật (0–100, không quy đổi) | `GET /radar/http/timeseries_groups/bot_class` |
+| `netflows` | Chỉ số lưu lượng mạng tổng (thang tương đối) | `GET /radar/netflows/timeseries` |
 
 > **Cố định `aggInterval=1h`** để dữ liệu backfill và polling có cùng bước thời gian. Nếu không chỉ định, Cloudflare tự đổi độ phân giải theo `dateRange`.
 >
@@ -158,8 +158,9 @@ DO UPDATE SET value = EXCLUDED.value, updated_at = now();
 
 ### 3.5. Backfill và polling
 
-- **Backfill ở lần chạy đầu** (khi Silver trống): nạp **12 tháng** bằng `dateStart`/`dateEnd`, mỗi đợt 7 ngày. Lý do: đề bài yêu cầu trend và seasonal theo **tháng**, mà 30 ngày dữ liệu thì không đủ điểm để vẽ.
-- **Polling mỗi 300 giây** với `dateRange=2d`, để cập nhật cả những mốc vừa qua mà Cloudflare có thể đã điều chỉnh.
+- **Backfill ở lần chạy đầu** (khi Silver trống): luồng nền lùi dần từ mới đến cũ tới **365 ngày**, mỗi lô **28 ngày**, **chồng 2 ngày**; chạy tiếp được sau khi bị ngắt, lỗi thì thử lại sau 15 phút. Lý do: đề bài yêu cầu trend và seasonal theo **tháng**, mà 30 ngày dữ liệu thì không đủ điểm để vẽ.
+- **Quy đổi thang đo:** vì `MIN0_MAX` tính theo từng cửa sổ, mỗi cửa sổ mới được nhân hệ số `k = median(Silver / cửa sổ mới)` trên vùng chồng (cần ≥ 12 điểm). Cửa sổ không đủ vùng chồng thì bị bỏ qua, không ghi dữ liệu lệch thang. `bot_share`/`human_share` không quy đổi. Chi tiết: `services/ingestion/README.md`.
+- **Polling mỗi 300 giây** với `dateRange=2d`, để cập nhật cả những mốc vừa qua mà Cloudflare có thể đã điều chỉnh. Nếu Silver cũ hơn ~36 giờ, cửa sổ tự mở rộng (tối đa 28 ngày) để lấp khoảng trống.
 - **Xử lý lỗi:** `try/except` kết hợp backoff 1s → 2s → 4s → … tối đa 60s. Một endpoint lỗi không làm dừng service.
 - **Múi giờ:** lưu UTC (`TIMESTAMPTZ`). Business Logic đổi sang `Asia/Ho_Chi_Minh` khi tính theo giờ, theo thứ và khi xác định "ngày mai".
 
@@ -196,11 +197,14 @@ CREATE TABLE bronze.raw_api_responses (
     fetched_at   TIMESTAMPTZ DEFAULT now()
 );
 
+CREATE INDEX idx_bronze_fetched_at ON bronze.raw_api_responses (fetched_at);
+
 CREATE TABLE silver.metrics_hourly (
     ts          TIMESTAMPTZ NOT NULL,
     metric      VARCHAR(32) NOT NULL,   -- http_traffic | l7_attack | bot_share | human_share | netflows
     value       DOUBLE PRECISION,
     updated_at  TIMESTAMPTZ DEFAULT now(),
+    source      VARCHAR(16) NOT NULL DEFAULT 'radar',  -- radar | demo (dữ liệu demo phải gắn nhãn)
     PRIMARY KEY (ts, metric)
 );
 
@@ -312,7 +316,7 @@ API viết bằng FastAPI, chạy ở port `8000`, đọc từ Data Mart. Timese
 | `GET /api/trend?granularity=month\|week&metric=` | Trend |
 | `GET /api/seasonal?period_type=hour_of_day\|day_of_week\|month&metric=` | Seasonal |
 | `GET /api/correlation` | Ma trận tương quan |
-| `GET /api/clusters` | Phân cụm |
+| `GET /api/clusters` | Phân cụm; features gồm số đo/null và metadata metric tùy chọn |
 | `GET /api/forecast/continuous` | Dự báo chỉ số lưu lượng ngày mai |
 | `GET /api/forecast/discrete` | Nhãn rủi ro ngày mai |
 | `GET /api/status` | Lần chạy gần nhất của từng service và độ mới của dữ liệu |
@@ -397,7 +401,7 @@ API viết bằng FastAPI, chạy ở port `8000`, đọc từ Data Mart. Timese
 | :--- | :--- |
 | Chu kỳ Data Ingestion | 5 phút (300 giây) |
 | Độ phân giải dữ liệu | 1 giờ (`aggInterval=1h`) |
-| Backfill ban đầu | 12 tháng (khoảng 8.760 mốc giờ × 5 chỉ số) |
+| Backfill ban đầu | 365 ngày (khoảng 8.760 mốc giờ × 5 chỉ số) |
 | Thời gian lưu Bronze | 30 ngày |
 | Chu kỳ Data Analysis / Prediction | 5 phút |
 | Chu kỳ Clustering | 1 ngày (00:30 giờ VN) |
@@ -565,7 +569,7 @@ TRUNCATE gold.timeseries_resampled, gold.histogram, gold.trend, gold.seasonal,
          gold.forecast_continuous, gold.forecast_discrete;
 ```
 
-> **Mẹo:** ở bước 1 dùng `docker compose down` **không kèm `-v`** để giữ volume Warehouse, tránh phải backfill 12 tháng (mất vài phút) ngay trong buổi demo.
+> **Mẹo:** ở bước 1 dùng `docker compose down` **không kèm `-v`** để giữ volume Warehouse, tránh phải backfill 365 ngày (mất vài phút) ngay trong buổi demo.
 
 ---
 
