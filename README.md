@@ -316,7 +316,7 @@ API viết bằng FastAPI, chạy ở port `8000`, đọc từ Data Mart. Timese
 | `GET /api/trend?granularity=month\|week&metric=` | Trend |
 | `GET /api/seasonal?period_type=hour_of_day\|day_of_week\|month&metric=` | Seasonal |
 | `GET /api/correlation` | Ma trận tương quan |
-| `GET /api/clusters` | Phân cụm |
+| `GET /api/clusters` | Phân cụm; features gồm số đo/null và metadata metric tùy chọn |
 | `GET /api/forecast/continuous` | Dự báo chỉ số lưu lượng ngày mai |
 | `GET /api/forecast/discrete` | Nhãn rủi ro ngày mai |
 | `GET /api/status` | Lần chạy gần nhất của từng service và độ mới của dữ liệu |

@@ -89,6 +89,7 @@ For Analysis/Clustering/Prediction, `common.runner` owns `gold.service_runs`; ta
 - Analysis/ML tasks and training in the active checkout must be inspected before assuming they exist. Separate feature branches may be ahead of develop. Do not merge their code just to make backend tests pass. Current unimplemented tasks report a failed run rather than fabricated success.
 - Frontend has separate demo and live API modes. Live mode uses NextAuth/Keycloak, backend-validated roles, refresh and exact run tracking. It requires `AUTH_ENABLED=true`. See `docs/frontend-live-integration.md`; algorithm/data acceptance remains separate.
 - Check the code before assuming a README feature exists.
+- ML contract review: see `docs/ml-contract-review.md` for issue #13/PR #12. Cluster feature JSON can contain numeric/null measurements plus the `metric` metadata string; forecast probability means P(High), including Low labels. Do not silently change the API's Vietnam-tomorrow default to match stale or UTC ML targets.
 
 ### Ingestion service (`services/ingestion/`)
 
