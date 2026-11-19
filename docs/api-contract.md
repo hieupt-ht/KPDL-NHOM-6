@@ -37,6 +37,10 @@ Timeseries/clusters phân trang với `limit` mặc định 1000, tối đa 1000
 
 Forecast mặc định lấy **đúng ngày mai theo lịch Việt Nam**, không thay bằng dự báo cũ. Khi truyền start/end, trả dự báo có target_date mới nhất trong khoảng lọc; không có kết quả là 404. `label` có thể là Cao, Thấp hoặc null; probability là xác suất 0–1 hoặc null. Đây là kết quả đọc từ Gold, không chạy model trong API.
 
+`probability` được đọc theo nghĩa **P(Cao)** (hợp đồng tích hợp đề xuất ở issue #13), kể cả khi `label="Thấp"`. Ví dụ Thấp + 0.2 nghĩa là xác suất Cao 20%, không phải độ tin cậy Thấp 20%. API giữ nguyên kết quả, không tự đảo xác suất hoặc chọn lại nhãn/cutoff. Metric tính rủi ro, percentile và cutoff cần nhóm ML/Analysis chốt; API không coi các giá trị tạm trong PR #12 là quyết định chung.
+
+`cluster_results.features` giữ các số đo số/null và hỗ trợ riêng metadata `metric` thuộc danh sách Metric. Ví dụ `{"metric":"http_traffic","value":1.31,"dev_7":null}`. Chỉ khóa `metric` được chứa tên metric dạng chuỗi; các khóa số đo khác vẫn phải là số/null. JSON ngoài không đổi, không thêm cột DB. Frontend không dùng trường metadata hoặc đặc trưng value/lag/rolling làm thay thế HTTP mean/L7 max/bot mean nếu chưa có quy ước. Các tên cụm ngoài Bình thường/Cao điểm/Bất thường cần nhóm thống nhất cách diễn giải, không tự coi Cao là Bất thường.
+
 Status trả một lần chạy mới nhất của mỗi service (started_at giảm dần, id giảm dần để phá hòa; started_at NULL xếp sau). Chưa chạy service nào thì `service_runs=[]`; chưa có freshness thì `data_freshness=null`. Cấu trúc từng phần tử giữ tên trường của frontend/types/api.ts.
 
 Ví dụ:

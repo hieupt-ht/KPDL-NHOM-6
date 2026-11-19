@@ -2,9 +2,9 @@
 
 import math
 from datetime import date, datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_args
 
-from pydantic import BaseModel, BeforeValidator, Field
+from pydantic import BaseModel, BeforeValidator, Field, field_validator
 
 Metric = Literal["http_traffic", "l7_attack", "bot_share", "human_share", "netflows"]
 Granularity = Literal["day", "week", "month"]
@@ -61,8 +61,22 @@ class ClusterResult(BaseModel):
     date: date
     cluster_id: int
     cluster_name: str
-    features: dict[str, Number] | None
+    features: dict[str, Number | Metric] | None
     computed_at: datetime | None
+
+    @field_validator("features")
+    @classmethod
+    def validate_feature_metadata(
+        cls, features: dict[str, float | str | None] | None
+    ) -> dict[str, float | str | None] | None:
+        if features is not None:
+            for key, value in features.items():
+                if key == "metric":
+                    if value not in get_args(Metric):
+                        raise ValueError("features.metric must be a supported metric")
+                elif isinstance(value, str):
+                    raise ValueError("Cluster measurements must be numeric or null")
+        return features
 
 
 class ForecastContinuous(BaseModel):
