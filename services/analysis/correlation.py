@@ -15,14 +15,17 @@ CORRELATION_VARS: tuple[str, ...] = (
     "human_share",
     "netflows",
 )
-MIN_OBSERVATIONS: int = 2
+# Số quan sát tối thiểu để bậc tự do df = N - 2 >= 1.
+# Không đánh giá tương quan chỉ dựa trên 2 quan sát vì hệ số khi đó luôn bằng +/-1.0 (suy biến), không đáng tin cậy.
+MIN_OBSERVATIONS: int = 3
 
 
 def compute_pearson_r(x: np.ndarray, y: np.ndarray) -> float | None:
     """Tính hệ số tương quan Pearson giữa 2 mảng quan sát.
 
     Điều kiện:
-    - Cần ít nhất 2 quan sát hợp lệ (N >= 2).
+    - Cần ít nhất 3 quan sát hợp lệ (N >= 3) để bậc tự do df = N - 2 >= 1.
+      Không đánh giá tương quan chỉ dựa trên 2 quan sát.
     - Cả hai biến phải có phương sai > 0 (không zero-variance).
     - Trả về None nếu hệ số không xác định (không tự ý thay bằng 0).
     - Hệ số kết quả thuộc [-1.0, 1.0].

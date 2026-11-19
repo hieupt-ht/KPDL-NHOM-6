@@ -18,7 +18,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from reader import ALL_METRICS
+
 log = logging.getLogger(__name__)
+
+# Số quan sát hợp lệ tối thiểu cho mỗi metric để chuỗi được xem là đủ điều kiện phân tích
+MIN_VALID_RECORDS_PER_METRIC: int = 24
 
 
 @dataclass
@@ -43,6 +48,10 @@ class MetricQualitySummary:
     robust_z_outliers_count: int = 0
     iqr_outliers_count: int = 0
     anomaly_samples: list[dict[str, Any]] = field(default_factory=list)
+    is_sufficient: bool = False
+    sufficient_for_resampling: bool = False
+    sufficient_for_seasonal: bool = False
+    sufficient_for_trend: bool = False
 
 
 @dataclass
@@ -53,12 +62,14 @@ class QualityReport:
     total_rows: int
     metrics_summary: dict[str, MetricQualitySummary]
     issues_detected: list[str] = field(default_factory=list)
+    algorithm_fitness: dict[str, bool] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "is_usable": self.is_usable,
             "total_rows": self.total_rows,
             "issues": self.issues_detected,
+            "algorithm_fitness": self.algorithm_fitness,
             "metrics": {m: vars(s) for m, s in self.metrics_summary.items()},
         }
 
@@ -152,10 +163,9 @@ def evaluate_data_quality(df: pd.DataFrame) -> QualityReport:
         summary.null_or_nan_count = int(null_mask.sum())
         summary.inf_count = int(inf_mask.sum())
 
-        valid_mask = ~null_mask & ~inf_mask
-        valid_df = group[valid_mask].sort_values("ts")
-        valid_vals = valid_df["value"].to_numpy(dtype=float)
-        summary.valid_records = len(valid_vals)
+        finite_mask = ~null_mask & ~inf_mask
+        finite_df = group[finite_mask]
+        finite_vals = finite_df["value"].to_numpy(dtype=float)
 
         if summary.null_or_nan_count > 0:
             issues.append(f"Metric '{metric_name}' có {summary.null_or_nan_count} giá trị NULL hoặc NaN.")
@@ -164,16 +174,21 @@ def evaluate_data_quality(df: pd.DataFrame) -> QualityReport:
 
         # 3. Kiểm tra tính hợp lệ miền giá trị theo ngữ cảnh chỉ số
         if metric_name in ("bot_share", "human_share"):
-            invalid_bounds = (valid_vals < 0.0) | (valid_vals > 100.0)
-            summary.invalid_value_count = int(invalid_bounds.sum())
-            if summary.invalid_value_count > 0:
-                issues.append(f"Metric '{metric_name}' có {summary.invalid_value_count} giá trị ngoài miền [0, 100].")
+            invalid_bounds = (finite_vals < 0.0) | (finite_vals > 100.0)
         else:
             # http_traffic, l7_attack, netflows không được âm
-            invalid_neg = valid_vals < 0.0
-            summary.invalid_value_count = int(invalid_neg.sum())
-            if summary.invalid_value_count > 0:
-                issues.append(f"Metric '{metric_name}' có {summary.invalid_value_count} giá trị âm không hợp lệ.")
+            invalid_bounds = finite_vals < 0.0
+        summary.invalid_value_count = int(invalid_bounds.sum())
+        if summary.invalid_value_count > 0:
+            bound_desc = "[0, 100]" if metric_name in ("bot_share", "human_share") else ">= 0"
+            issues.append(
+                f"Metric '{metric_name}' có {summary.invalid_value_count} giá trị ngoài miền {bound_desc}."
+            )
+
+        # Giá trị ngoài miền giá trị không được tính là quan sát hợp lệ
+        valid_df = finite_df[~invalid_bounds].sort_values("ts")
+        valid_vals = valid_df["value"].to_numpy(dtype=float)
+        summary.valid_records = len(valid_vals)
 
         # 4. Kiểm tra khoảng thời gian bị thiếu (gaps > 1h)
         if len(valid_df) >= 2:
@@ -207,29 +222,77 @@ def evaluate_data_quality(df: pd.DataFrame) -> QualityReport:
             # Thu thập mẫu bất thường (kết hợp cả Robust Z và IQR)
             anomaly_mask = outliers_z | outliers_iqr
             if np.any(anomaly_mask):
+                # Rào "far out" (Q3 + 3*IQR): chỉ đột biến vượt rào này mới xem
+                # là bằng chứng tấn công/lưu lượng bất thường trên metric mạng
+                q75 = float(np.percentile(valid_vals, 75))
+                far_upper = q75 + 3.0 * iqr if iqr > 0 else med + 3.0 * mad
                 anom_rows = valid_df[anomaly_mask].head(5)
                 for _, r in anom_rows.iterrows():
-                    # Phân biệt lỗi chất lượng với đột biến nghiệp vụ thực tế
-                    is_domain_surge = (metric_name == "l7_attack" and r["value"] > med) or (
-                        metric_name == "http_traffic" and r["value"] > med
+                    is_attack_evidence = (
+                        metric_name in ("l7_attack", "http_traffic")
+                        and float(r["value"]) > far_upper
                     )
-                    category = "ATTACK_OR_TRAFFIC_SURGE" if is_domain_surge else "STATISTICAL_OUTLIER"
+                    category = (
+                        "ATTACK_OR_TRAFFIC_SURGE" if is_attack_evidence else "STATISTICAL_OUTLIER"
+                    )
                     summary.anomaly_samples.append({
                         "ts": str(r["ts"]),
                         "value": float(r["value"]),
                         "category": category,
                     })
 
+        summary.is_sufficient = summary.valid_records >= MIN_VALID_RECORDS_PER_METRIC
+        summary.sufficient_for_resampling = summary.valid_records >= 1
+        summary.sufficient_for_seasonal = summary.valid_records >= MIN_VALID_RECORDS_PER_METRIC
+        # Trend yêu cầu ít nhất 8 tuần (8 * 168 giờ) đối với dữ liệu theo giờ
+        summary.sufficient_for_trend = summary.valid_records >= (8 * 168)
+
         summaries[str(metric_name)] = summary
 
-    # Dữ liệu được xem là dùng được nếu có ít nhất 1 metric có quan sát hợp lệ
-    is_usable = any(s.valid_records > 0 for s in summaries.values())
+    # Metric bắt buộc phải có đủ dữ liệu hợp lệ, không chỉ cần 1 metric bất kỳ
+    missing_metrics = [m for m in ALL_METRICS if m not in summaries]
+    for m in missing_metrics:
+        issues.append(f"Metric '{m}' không có dữ liệu trong Silver.")
+
+    insufficient = [
+        m for m in ALL_METRICS
+        if m in summaries and not summaries[m].is_sufficient
+    ]
+    for m in insufficient:
+        issues.append(
+            f"Metric '{m}' chỉ có {summaries[m].valid_records} quan sát hợp lệ "
+            f"(< {MIN_VALID_RECORDS_PER_METRIC} yêu cầu)."
+        )
+
+    # Đánh giá khả năng đáp ứng theo từng thuật toán
+    hist_metrics = ("http_traffic", "l7_attack", "bot_share")
+    valid_with_variance = [
+        s for s in summaries.values()
+        if s.valid_records >= 2 and (s.std_value or 0.0) > 1e-9
+    ]
+
+    algorithm_fitness = {
+        "resampling": any(s.sufficient_for_resampling for s in summaries.values()),
+        "histogram": any(
+            summaries[m].sufficient_for_resampling
+            for m in hist_metrics
+            if m in summaries
+        ),
+        "seasonal": any(s.sufficient_for_seasonal for s in summaries.values()),
+        "trend": any(s.sufficient_for_trend for s in summaries.values()),
+        "correlation": len(valid_with_variance) >= 2,
+    }
+
+    is_usable = all(
+        m in summaries and summaries[m].is_sufficient for m in ALL_METRICS
+    )
 
     report = QualityReport(
         is_usable=is_usable,
         total_rows=total_rows,
         metrics_summary=summaries,
         issues_detected=issues,
+        algorithm_fitness=algorithm_fitness,
     )
 
     log.info(

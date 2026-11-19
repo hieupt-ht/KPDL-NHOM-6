@@ -134,3 +134,56 @@ def test_immutability_of_source_dataframe():
     evaluate_data_quality(df)
     # df gốc không bị thay đổi cột hay giá trị
     pd.testing.assert_frame_equal(df, df_copy)
+
+
+def test_quality_unusable_when_insufficient_records():
+    # 10 records (< 24) -> is_usable phải là False, không coi đủ điều kiện chỉ vì có 1 vài bản ghi
+    base = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    rows = []
+    for i in range(10):
+        for m in ("http_traffic", "l7_attack", "bot_share", "human_share", "netflows"):
+            rows.append({"ts": base + timedelta(hours=i), "metric": m, "value": 1.0})
+    df = pd.DataFrame(rows)
+    report = evaluate_data_quality(df)
+    assert not report.is_usable
+    for m in ("http_traffic", "l7_attack", "bot_share", "human_share", "netflows"):
+        assert not report.metrics_summary[m].is_sufficient
+
+
+def test_anomaly_distinguishes_attack_surge_from_statistical_outlier():
+    # http_traffic có đột biến lớn vượt Q3 + 3*IQR -> ATTACK_OR_TRAFFIC_SURGE
+    base = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    rows = []
+    # 25 bản ghi bình thường quanh 1.0, bản ghi thứ 26 là 100.0 (đột biến lớn)
+    for i in range(25):
+        rows.append({"ts": base + timedelta(hours=i), "metric": "http_traffic", "value": 1.0 + 0.01 * i})
+    rows.append({"ts": base + timedelta(hours=25), "metric": "http_traffic", "value": 100.0})
+
+    df = pd.DataFrame(rows)
+    report = evaluate_data_quality(df)
+    summary = report.metrics_summary["http_traffic"]
+    assert len(summary.anomaly_samples) > 0
+    surge_sample = next((s for s in summary.anomaly_samples if s["value"] == 100.0), None)
+    assert surge_sample is not None
+    assert surge_sample["category"] == "ATTACK_OR_TRAFFIC_SURGE"
+
+
+def test_algorithm_fitness_evaluation():
+    base = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    # 24 giờ cho 5 metrics: đủ resampling, seasonal, correlation; chưa đủ trend (cần >= 8 tuần)
+    rows = []
+    for i in range(24):
+        ts = base + timedelta(hours=i)
+        rows.append({"ts": ts, "metric": "http_traffic", "value": 1.0 + float(i % 5)})
+        rows.append({"ts": ts, "metric": "l7_attack", "value": 0.5 + float(i % 3)})
+        rows.append({"ts": ts, "metric": "bot_share", "value": 20.0})
+        rows.append({"ts": ts, "metric": "human_share", "value": 80.0})
+        rows.append({"ts": ts, "metric": "netflows", "value": 10.0 + float(i)})
+    df = pd.DataFrame(rows)
+    report = evaluate_data_quality(df)
+
+    assert report.algorithm_fitness["resampling"] is True
+    assert report.algorithm_fitness["histogram"] is True
+    assert report.algorithm_fitness["seasonal"] is True
+    assert report.algorithm_fitness["correlation"] is True
+    assert report.algorithm_fitness["trend"] is False  # 24 giờ < 8 tuần -> False

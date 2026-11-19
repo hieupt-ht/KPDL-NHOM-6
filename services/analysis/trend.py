@@ -24,8 +24,12 @@ def _prepare_regular_series(
 ) -> pd.Series | None:
     """Tạo chuỗi thời gian định kỳ theo tần suất freq ('MS' cho đầu tháng, 'W-MON' cho đầu tuần).
 
-    Không tự nội suy hoặc tạo dữ liệu giả. Nếu chuỗi có khoảng trống ở giữa,
-    giữ nguyên index thực tế để kiểm tra tính liên tục.
+    Quy định:
+    - Kiểm tra tính liên tục và độ đầy đủ của dữ liệu theo từng bucket.
+    - Phân biệt bucket đầy đủ và bucket chưa hoàn chỉnh:
+      + Bucket biên (đầu hoặc cuối) chưa hoàn chỉnh được cắt tỉa an toàn.
+      + Bucket bên trong bị thiếu dữ liệu không được tự ý nội suy hoặc tạo dữ liệu giả;
+        khi đó toàn bộ chuỗi bị từ chối để bảo đảm tính chuẩn xác của trend.
     """
     if metric_df.empty:
         return None
@@ -44,29 +48,82 @@ def _prepare_regular_series(
     else:
         raise ValueError(f"Tần suất không hợp lệ: {freq}")
 
-    # Gom nhóm lấy trung bình theo bucket
-    grouped = df.groupby("bucket_ts")["value"].mean().sort_index()
-    if grouped.empty:
+    # Gom nhóm lấy giá trị trung bình và số lượng quan sát theo bucket
+    counts = df.groupby("bucket_ts")["value"].count()
+    means = df.groupby("bucket_ts")["value"].mean().sort_index()
+    if means.empty:
         return None
 
-    # Kiểm tra xem có bị thiếu mốc ở giữa hay không bằng cách tạo full range
+    # Xác định độ phân giải thời gian của dữ liệu đầu vào (hourly vs đã tổng hợp)
+    sorted_ts = df["ts_local"].sort_values()
+    diffs = sorted_ts.diff().dropna()
+    is_hourly = (diffs.median() <= pd.Timedelta(hours=2)) if len(diffs) > 0 else False
+
+    # Đối với dữ liệu theo giờ, kiểm tra độ đầy đủ của từng bucket
+    if is_hourly:
+        # Ngưỡng số giờ tối thiểu để một bucket được xem là đầy đủ
+        # Tuần: 168 giờ (cho phép dung sai tối đa 10% do trễ mạng: >= 151 giờ)
+        # Tháng: 28-31 ngày * 24 giờ (>= 28 * 24 * 0.9 = 604 giờ)
+        min_hours_per_bucket = 151 if freq == "W" else 604
+
+        bucket_indices = list(means.index)
+
+        # Phân biệt và cắt tỉa bucket biên đầu tiên nếu chưa hoàn chỉnh
+        if counts[bucket_indices[0]] < min_hours_per_bucket:
+            log.info(
+                "Bucket đầu %s chỉ có %d giờ (< %d yêu cầu). Cắt tỉa bucket biên chưa hoàn chỉnh.",
+                bucket_indices[0],
+                counts[bucket_indices[0]],
+                min_hours_per_bucket,
+            )
+            bucket_indices = bucket_indices[1:]
+
+        # Phân biệt và cắt tỉa bucket biên cuối cùng nếu chưa hoàn chỉnh
+        if bucket_indices and counts[bucket_indices[-1]] < min_hours_per_bucket:
+            log.info(
+                "Bucket cuối %s chỉ có %d giờ (< %d yêu cầu). Cắt tỉa bucket biên chưa hoàn chỉnh.",
+                bucket_indices[-1],
+                counts[bucket_indices[-1]],
+                min_hours_per_bucket,
+            )
+            bucket_indices = bucket_indices[:-1]
+
+        if not bucket_indices:
+            log.warning("Không còn bucket nào hoàn chỉnh sau khi cắt tỉa bucket biên.")
+            return None
+
+        means = means.loc[bucket_indices]
+        counts = counts.loc[bucket_indices]
+
+        # Kiểm tra độ đầy đủ của các bucket bên trong (interior buckets)
+        incomplete_interior = [
+            b for b in bucket_indices if counts[b] < min_hours_per_bucket
+        ]
+        if incomplete_interior:
+            log.warning(
+                "Chuỗi %s có %d bucket bên trong không đầy đủ dữ liệu (thiếu giờ). "
+                "Không tự nội suy hay tạo dữ liệu giả; bỏ qua chuỗi.",
+                freq,
+                len(incomplete_interior),
+            )
+            return None
+
+    # Kiểm tra tính liên tục: không được thiếu bất kỳ bucket nào ở giữa chuỗi
     full_range_freq = "MS" if freq == "M" else "W-MON"
     full_range = pd.date_range(
-        start=grouped.index.min(), end=grouped.index.max(), freq=full_range_freq
+        start=means.index.min(), end=means.index.max(), freq=full_range_freq
     )
-    if len(full_range) != len(grouped):
-        # Có mốc thời gian bị khuyết ở giữa chuỗi
+    if len(full_range) != len(means):
         log.warning(
-            "Chuỗi %s có %d mốc nhưng khoảng thời gian liên tục cần %d mốc (có khoảng trống).",
+            "Chuỗi %s có %d mốc nhưng khoảng thời gian liên tục cần %d mốc (có khoảng trống ở giữa).",
             freq,
-            len(grouped),
+            len(means),
             len(full_range),
         )
-        # Vì yêu cầu: 'Không nội suy hoặc tạo dữ liệu giả để đủ điều kiện', nếu chuỗi bị đứt quãng không thể decompose
         return None
 
-    grouped.index = pd.DatetimeIndex(grouped.index, freq=full_range_freq)
-    return grouped
+    means.index = pd.DatetimeIndex(means.index, freq=full_range_freq)
+    return means
 
 
 def decompose_metric_trend(

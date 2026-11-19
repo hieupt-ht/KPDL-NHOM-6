@@ -77,10 +77,15 @@ def _replace_gold_table(
     columns: tuple[str, ...],
     records: Sequence[dict[str, Any]],
 ) -> None:
-    """Xóa toàn bộ bảng Gold tương ứng rồi chèn lại records trong transaction hiện tại."""
+    """Thay thế dữ liệu bảng Gold: chỉ xóa và chèn khi có kết quả mới.
+
+    Nếu records rỗng (ví dụ: không đủ dữ liệu để tính trend), bảng Gold cũ
+    được giữ nguyên — không xóa kết quả hợp lệ trước đó.
+    """
+    if not records:
+        return
     cur.execute(delete_sql)
-    if records:
-        cur.executemany(insert_sql, [tuple(r[c] for c in columns) for r in records])
+    cur.executemany(insert_sql, [tuple(r[c] for c in columns) for r in records])
 
 
 def _upsert_freshness(cur: psycopg.Cursor, latest_silver_ts: datetime) -> None:
@@ -193,7 +198,10 @@ def write_all_analysis_results(
 ) -> None:
     """Ghi toàn bộ kết quả phân tích vào Data Mart trong một transaction duy nhất.
 
-    Nếu Silver rỗng hoặc latest_silver_ts là None, hàm này không được gọi.
+    Đối với mỗi bảng Gold: chỉ xóa và ghi lại khi kết quả mới không rỗng.
+    Bảng có kết quả rỗng (ví dụ trend không đủ dữ liệu) được giữ nguyên dữ liệu cũ.
+    Nếu bất kỳ thao tác nào thất bại, toàn bộ transaction bị rollback.
+    Nếu latest_silver_ts là None, hàm này không được gọi.
     """
     if latest_silver_ts is None:
         raise ValueError("latest_silver_ts không được rỗng khi cập nhật Data Mart.")

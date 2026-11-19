@@ -108,22 +108,55 @@ def test_write_rollback_on_failure():
     mock_conn.transaction.assert_called_once()
 
 
-def test_idempotent_rerun_deletes_old_data():
-    # Khi chạy lại, tất cả 5 bảng Gold phải được thực thi lệnh DELETE trước khi INSERT
+def test_write_all_preserves_old_gold_when_records_empty():
+    """Khi kết quả mới rỗng, bảng Gold cũ phải được giữ nguyên (không DELETE)."""
     mock_conn = MagicMock()
     mock_cur = MagicMock()
     mock_conn.transaction.return_value.__enter__.return_value = None
     mock_conn.cursor.return_value.__enter__.return_value = mock_cur
 
     latest_ts = datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)
+    # Truyền toàn bộ records rỗng — không có bảng nào được DELETE
     write_all_analysis_results([], [], [], [], [], latest_silver_ts=latest_ts, conn=mock_conn)
 
     deleted_tables = [c[0][0].strip() for c in mock_cur.execute.call_args_list if "DELETE FROM" in c[0][0]]
+    assert "DELETE FROM gold.timeseries_resampled" not in deleted_tables
+    assert "DELETE FROM gold.histogram" not in deleted_tables
+    assert "DELETE FROM gold.trend" not in deleted_tables
+    assert "DELETE FROM gold.seasonal" not in deleted_tables
+    assert "DELETE FROM gold.correlation" not in deleted_tables
+    # data_freshness vẫn được cập nhật
+    freshness_calls = [c[0][0] for c in mock_cur.execute.call_args_list if "gold.data_freshness" in c[0][0]]
+    assert len(freshness_calls) == 1
+
+
+def test_write_all_deletes_only_tables_with_new_results():
+    """Chỉ bảng có kết quả mới (non-empty) mới bị DELETE + INSERT."""
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_conn.transaction.return_value.__enter__.return_value = None
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+
+    latest_ts = datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)
+    resampled = [{"granularity": "day", "ts": latest_ts, "metric": "http_traffic", "mean": 1.0, "min": 0.5, "max": 1.5}]
+
+    # Chỉ resampled có dữ liệu; trend, seasonal, histogram, correlation rỗng
+    write_all_analysis_results(
+        resampled_records=resampled,
+        histogram_records=[],
+        trend_records=[],
+        seasonal_records=[],
+        correlation_records=[],
+        latest_silver_ts=latest_ts,
+        conn=mock_conn,
+    )
+
+    deleted_tables = {c[0][0].strip() for c in mock_cur.execute.call_args_list if "DELETE FROM" in c[0][0]}
     assert "DELETE FROM gold.timeseries_resampled" in deleted_tables
-    assert "DELETE FROM gold.histogram" in deleted_tables
-    assert "DELETE FROM gold.trend" in deleted_tables
-    assert "DELETE FROM gold.seasonal" in deleted_tables
-    assert "DELETE FROM gold.correlation" in deleted_tables
+    assert "DELETE FROM gold.histogram" not in deleted_tables
+    assert "DELETE FROM gold.trend" not in deleted_tables
+    assert "DELETE FROM gold.seasonal" not in deleted_tables
+    assert "DELETE FROM gold.correlation" not in deleted_tables
 
 
 def test_write_all_analysis_results_rejects_none_silver_ts():

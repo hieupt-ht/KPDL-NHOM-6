@@ -40,12 +40,17 @@ def test_seasonal_exact_mean_calculation():
 
 def test_seasonal_timezone_bucket_mapping():
     # 2026-11-01 17:00:00 UTC = 2026-11-02 00:00:00 VN (Thứ Hai, ngày 2 tháng 11)
-    ts = datetime(2026, 11, 1, 17, 0, 0, tzinfo=timezone.utc)
-    df = pd.DataFrame([{"ts": ts, "metric": "l7_attack", "value": 0.05}])
+    # Cung cấp 2 quan sát để đủ điều kiện quan sát tối thiểu (>= 2)
+    ts1 = datetime(2026, 11, 1, 17, 0, 0, tzinfo=timezone.utc)
+    ts2 = datetime(2026, 11, 1, 18, 0, 0, tzinfo=timezone.utc)
+    df = pd.DataFrame([
+        {"ts": ts1, "metric": "l7_attack", "value": 0.05},
+        {"ts": ts2, "metric": "l7_attack", "value": 0.06},
+    ])
     records = compute_seasonal_records(df)
 
-    hour_rec = next(r for r in records if r["period_type"] == "hour_of_day")
-    assert hour_rec["bucket"] == 0  # 00:00 giờ VN
+    hour_recs = {r["bucket"] for r in records if r["period_type"] == "hour_of_day"}
+    assert 0 in hour_recs  # 00:00 giờ VN
 
     dow_rec = next(r for r in records if r["period_type"] == "day_of_week")
     assert dow_rec["bucket"] == 0   # Thứ Hai giờ VN (dayofweek = 0)
@@ -55,13 +60,23 @@ def test_seasonal_timezone_bucket_mapping():
 
 
 def test_seasonal_single_record():
+    # 1 bản ghi đơn lẻ không đủ để kết luận tính mùa vụ -> an toàn trả về rỗng
     ts = datetime(2026, 7, 10, 3, 0, tzinfo=timezone.utc)
     df = pd.DataFrame([{"ts": ts, "metric": "bot_share", "value": 45.0}])
     records = compute_seasonal_records(df)
-    # Chỉ sinh 3 bản ghi (1 hour, 1 dow, 1 month)
-    assert len(records) == 3
-    for r in records:
-        assert r["value"] == 45.0
+    assert len(records) == 0
+
+
+def test_seasonal_cycle_completeness_checker(sample_silver_df):
+    from seasonal import check_seasonal_cycle_completeness
+
+    comp = check_seasonal_cycle_completeness(sample_silver_df)
+    # sample_silver_df có đủ 24 giờ cho 5 metrics
+    assert "http_traffic" in comp
+    assert comp["http_traffic"]["hour_of_day"] is True
+    # Nhưng chỉ có 1 ngày nên day_of_week và month chưa đủ chu kỳ (False)
+    assert comp["http_traffic"]["day_of_week"] is False
+    assert comp["http_traffic"]["month"] is False
 
 
 def test_seasonal_empty_buckets_not_created():

@@ -67,14 +67,16 @@ def test_correlation_matrix_symmetry_and_self(sample_silver_df):
 
 
 def test_correlation_pairwise_missing():
-    # Biến A có 3 điểm, Biến B chỉ có ở điểm 0 và 1
+    # Biến A có 4 điểm, Biến B có 3 điểm (giao nhau tại điểm 0, 1, 2 -> N=3 hợp lệ)
     base = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
     rows = [
         {"ts": base + timedelta(hours=0), "metric": "http_traffic", "value": 1.0},
         {"ts": base + timedelta(hours=1), "metric": "http_traffic", "value": 2.0},
         {"ts": base + timedelta(hours=2), "metric": "http_traffic", "value": 3.0},
+        {"ts": base + timedelta(hours=3), "metric": "http_traffic", "value": 4.0},
         {"ts": base + timedelta(hours=0), "metric": "l7_attack", "value": 2.0},
         {"ts": base + timedelta(hours=1), "metric": "l7_attack", "value": 4.0},
+        {"ts": base + timedelta(hours=2), "metric": "l7_attack", "value": 6.0},
     ]
     df = pd.DataFrame(rows)
     records = compute_correlation_records(df, variables=("http_traffic", "l7_attack"))
@@ -83,14 +85,33 @@ def test_correlation_pairwise_missing():
     assert abs(corr_map[("http_traffic", "l7_attack")] - 1.0) < 1e-6
 
 
+def test_correlation_skips_when_less_than_three_observations():
+    # Chỉ có 2 mốc thời gian giao nhau: N=2 là không đáng tin cậy -> phải bị bỏ qua
+    base = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    rows = [
+        {"ts": base + timedelta(hours=0), "metric": "http_traffic", "value": 1.0},
+        {"ts": base + timedelta(hours=1), "metric": "http_traffic", "value": 2.0},
+        {"ts": base + timedelta(hours=0), "metric": "l7_attack", "value": 10.0},
+        {"ts": base + timedelta(hours=1), "metric": "l7_attack", "value": 20.0},
+    ]
+    df = pd.DataFrame(rows)
+    records = compute_correlation_records(df, variables=("http_traffic", "l7_attack"))
+    pair_keys = [(r["var_x"], r["var_y"]) for r in records]
+    # Cả tương quan chéo và tự tương quan đều bị bỏ qua vì N=2 < 3
+    assert ("http_traffic", "l7_attack") not in pair_keys
+    assert ("l7_attack", "http_traffic") not in pair_keys
+
+
 def test_correlation_disjoint_timestamps():
     # Hai metric có mốc thời gian hoàn toàn lệch nhau, không có điểm giao
     base = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
     rows = [
         {"ts": base + timedelta(hours=0), "metric": "http_traffic", "value": 1.0},
         {"ts": base + timedelta(hours=1), "metric": "http_traffic", "value": 2.0},
+        {"ts": base + timedelta(hours=2), "metric": "http_traffic", "value": 3.0},
         {"ts": base + timedelta(hours=10), "metric": "l7_attack", "value": 10.0},
         {"ts": base + timedelta(hours=11), "metric": "l7_attack", "value": 20.0},
+        {"ts": base + timedelta(hours=12), "metric": "l7_attack", "value": 30.0},
     ]
     df = pd.DataFrame(rows)
     records = compute_correlation_records(df, variables=("http_traffic", "l7_attack"))
@@ -98,7 +119,7 @@ def test_correlation_disjoint_timestamps():
     pair_keys = [(r["var_x"], r["var_y"]) for r in records]
     assert ("http_traffic", "l7_attack") not in pair_keys
     assert ("l7_attack", "http_traffic") not in pair_keys
-    # Nhưng mỗi biến tự tương quan với chính nó thì vẫn tồn tại
+    # Nhưng mỗi biến tự tương quan với chính nó thì vẫn tồn tại (đủ N=3)
     assert ("http_traffic", "http_traffic") in pair_keys
     assert ("l7_attack", "l7_attack") in pair_keys
 
