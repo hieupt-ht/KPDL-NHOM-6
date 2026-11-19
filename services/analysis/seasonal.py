@@ -11,7 +11,12 @@ from common.config import settings
 
 log = logging.getLogger(__name__)
 
-PERIOD_TYPES: tuple[str, ...] = ("hour_of_day", "day_of_week", "month")
+# (period_type, tên cột bucket đã gán trên clean_df)
+PERIOD_BUCKETS: tuple[tuple[str, str], ...] = (
+    ("hour_of_day", "bucket_hour"),
+    ("day_of_week", "bucket_dow"),
+    ("month", "bucket_month"),
+)
 
 
 def compute_seasonal_records(
@@ -44,47 +49,22 @@ def compute_seasonal_records(
     clean_df["ts"] = pd.to_datetime(clean_df["ts"], utc=True)
     clean_df["ts_local"] = clean_df["ts"].dt.tz_convert(target_tz)
 
-    records: list[dict[str, Any]] = []
-
-    # 1. hour_of_day (0 - 23)
     clean_df["bucket_hour"] = clean_df["ts_local"].dt.hour
-    grouped_hour = clean_df.groupby(["bucket_hour", "metric"])["value"].mean().reset_index()
-    for _, row in grouped_hour.iterrows():
-        val = float(row["value"])
-        if not np.isnan(val) and not np.isinf(val):
-            records.append({
-                "period_type": "hour_of_day",
-                "bucket": int(row["bucket_hour"]),
-                "metric": str(row["metric"]),
-                "value": val,
-            })
-
-    # 2. day_of_week (0 - 6, Thứ Hai = 0)
     clean_df["bucket_dow"] = clean_df["ts_local"].dt.dayofweek
-    grouped_dow = clean_df.groupby(["bucket_dow", "metric"])["value"].mean().reset_index()
-    for _, row in grouped_dow.iterrows():
-        val = float(row["value"])
-        if not np.isnan(val) and not np.isinf(val):
-            records.append({
-                "period_type": "day_of_week",
-                "bucket": int(row["bucket_dow"]),
-                "metric": str(row["metric"]),
-                "value": val,
-            })
-
-    # 3. month (1 - 12)
     clean_df["bucket_month"] = clean_df["ts_local"].dt.month
-    grouped_month = clean_df.groupby(["bucket_month", "metric"])["value"].mean().reset_index()
-    for _, row in grouped_month.iterrows():
-        val = float(row["value"])
-        if not np.isnan(val) and not np.isinf(val):
-            records.append({
-                "period_type": "month",
-                "bucket": int(row["bucket_month"]),
-                "metric": str(row["metric"]),
-                "value": val,
-            })
+
+    records: list[dict[str, Any]] = []
+    for period_type, bucket_col in PERIOD_BUCKETS:
+        grouped = clean_df.groupby([bucket_col, "metric"])["value"].mean().reset_index()
+        for _, row in grouped.iterrows():
+            val = float(row["value"])
+            if not np.isnan(val) and not np.isinf(val):
+                records.append({
+                    "period_type": period_type,
+                    "bucket": int(row[bucket_col]),
+                    "metric": str(row["metric"]),
+                    "value": val,
+                })
 
     log.info("Tính toán seasonal thành công: %d bản ghi", len(records))
     return records
-

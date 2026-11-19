@@ -122,7 +122,7 @@ def evaluate_data_quality(df: pd.DataFrame) -> QualityReport:
     issues: list[str] = []
     summaries: dict[str, MetricQualitySummary] = {}
 
-    if df.empty or "value" not in df.columns or "metric" not in df.columns:
+    if df.empty or not {"ts", "metric", "value"} <= set(df.columns):
         issues.append("Dữ liệu Silver trống hoặc không đúng cấu trúc bảng.")
         return QualityReport(
             is_usable=False,

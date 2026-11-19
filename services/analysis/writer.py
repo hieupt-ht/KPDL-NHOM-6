@@ -10,7 +10,7 @@
 - Không ghi dữ liệu giả.
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime
 import logging
 from typing import Any
@@ -21,6 +21,82 @@ from common.db import get_mart_conn
 
 log = logging.getLogger(__name__)
 
+_RESAMPLED_DELETE = "DELETE FROM gold.timeseries_resampled"
+_RESAMPLED_INSERT = """
+    INSERT INTO gold.timeseries_resampled
+        (granularity, ts, metric, mean, min, max)
+    VALUES (%s, %s, %s, %s, %s, %s)
+"""
+_RESAMPLED_COLS = ("granularity", "ts", "metric", "mean", "min", "max")
+
+_HISTOGRAM_DELETE = "DELETE FROM gold.histogram"
+_HISTOGRAM_INSERT = """
+    INSERT INTO gold.histogram
+        (metric, bin_start, bin_end, count)
+    VALUES (%s, %s, %s, %s)
+"""
+_HISTOGRAM_COLS = ("metric", "bin_start", "bin_end", "count")
+
+_TREND_DELETE = "DELETE FROM gold.trend"
+_TREND_INSERT = """
+    INSERT INTO gold.trend
+        (granularity, ts, metric, trend_value)
+    VALUES (%s, %s, %s, %s)
+"""
+_TREND_COLS = ("granularity", "ts", "metric", "trend_value")
+
+_SEASONAL_DELETE = "DELETE FROM gold.seasonal"
+_SEASONAL_INSERT = """
+    INSERT INTO gold.seasonal
+        (period_type, bucket, metric, value)
+    VALUES (%s, %s, %s, %s)
+"""
+_SEASONAL_COLS = ("period_type", "bucket", "metric", "value")
+
+_CORRELATION_DELETE = "DELETE FROM gold.correlation"
+_CORRELATION_INSERT = """
+    INSERT INTO gold.correlation
+        (var_x, var_y, coef, computed_at)
+    VALUES (%s, %s, %s, now())
+"""
+_CORRELATION_COLS = ("var_x", "var_y", "coef")
+
+_FRESHNESS_UPSERT = """
+    INSERT INTO gold.data_freshness (id, latest_silver_ts, computed_at)
+    VALUES (1, %s, now())
+    ON CONFLICT (id) DO UPDATE
+    SET latest_silver_ts = EXCLUDED.latest_silver_ts,
+        computed_at = now()
+"""
+
+
+def _replace_gold_table(
+    cur: psycopg.Cursor,
+    delete_sql: str,
+    insert_sql: str,
+    columns: tuple[str, ...],
+    records: Sequence[dict[str, Any]],
+) -> None:
+    """Xóa toàn bộ bảng Gold tương ứng rồi chèn lại records trong transaction hiện tại."""
+    cur.execute(delete_sql)
+    if records:
+        cur.executemany(insert_sql, [tuple(r[c] for c in columns) for r in records])
+
+
+def _upsert_freshness(cur: psycopg.Cursor, latest_silver_ts: datetime) -> None:
+    cur.execute(_FRESHNESS_UPSERT, (latest_silver_ts,))
+
+
+def _with_mart_conn(
+    conn: psycopg.Connection | None,
+    fn: Callable[[psycopg.Connection], None],
+) -> None:
+    if conn is not None:
+        fn(conn)
+    else:
+        with get_mart_conn() as own_conn:
+            fn(own_conn)
+
 
 def write_resampled(
     resampled_records: Sequence[dict[str, Any]],
@@ -30,32 +106,9 @@ def write_resampled(
     def _run(c: psycopg.Connection) -> None:
         with c.transaction():
             with c.cursor() as cur:
-                cur.execute("DELETE FROM gold.timeseries_resampled")
-                if resampled_records:
-                    cur.executemany(
-                        """
-                        INSERT INTO gold.timeseries_resampled
-                            (granularity, ts, metric, mean, min, max)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        """,
-                        [
-                            (
-                                r["granularity"],
-                                r["ts"],
-                                r["metric"],
-                                r["mean"],
-                                r["min"],
-                                r["max"],
-                            )
-                            for r in resampled_records
-                        ],
-                    )
+                _replace_gold_table(cur, _RESAMPLED_DELETE, _RESAMPLED_INSERT, _RESAMPLED_COLS, resampled_records)
 
-    if conn is not None:
-        _run(conn)
-    else:
-        with get_mart_conn() as own_conn:
-            _run(own_conn)
+    _with_mart_conn(conn, _run)
 
 
 def write_histogram(
@@ -66,30 +119,9 @@ def write_histogram(
     def _run(c: psycopg.Connection) -> None:
         with c.transaction():
             with c.cursor() as cur:
-                cur.execute("DELETE FROM gold.histogram")
-                if histogram_records:
-                    cur.executemany(
-                        """
-                        INSERT INTO gold.histogram
-                            (metric, bin_start, bin_end, count)
-                        VALUES (%s, %s, %s, %s)
-                        """,
-                        [
-                            (
-                                r["metric"],
-                                r["bin_start"],
-                                r["bin_end"],
-                                r["count"],
-                            )
-                            for r in histogram_records
-                        ],
-                    )
+                _replace_gold_table(cur, _HISTOGRAM_DELETE, _HISTOGRAM_INSERT, _HISTOGRAM_COLS, histogram_records)
 
-    if conn is not None:
-        _run(conn)
-    else:
-        with get_mart_conn() as own_conn:
-            _run(own_conn)
+    _with_mart_conn(conn, _run)
 
 
 def write_trend(
@@ -100,30 +132,9 @@ def write_trend(
     def _run(c: psycopg.Connection) -> None:
         with c.transaction():
             with c.cursor() as cur:
-                cur.execute("DELETE FROM gold.trend")
-                if trend_records:
-                    cur.executemany(
-                        """
-                        INSERT INTO gold.trend
-                            (granularity, ts, metric, trend_value)
-                        VALUES (%s, %s, %s, %s)
-                        """,
-                        [
-                            (
-                                r["granularity"],
-                                r["ts"],
-                                r["metric"],
-                                r["trend_value"],
-                            )
-                            for r in trend_records
-                        ],
-                    )
+                _replace_gold_table(cur, _TREND_DELETE, _TREND_INSERT, _TREND_COLS, trend_records)
 
-    if conn is not None:
-        _run(conn)
-    else:
-        with get_mart_conn() as own_conn:
-            _run(own_conn)
+    _with_mart_conn(conn, _run)
 
 
 def write_seasonal(
@@ -134,30 +145,9 @@ def write_seasonal(
     def _run(c: psycopg.Connection) -> None:
         with c.transaction():
             with c.cursor() as cur:
-                cur.execute("DELETE FROM gold.seasonal")
-                if seasonal_records:
-                    cur.executemany(
-                        """
-                        INSERT INTO gold.seasonal
-                            (period_type, bucket, metric, value)
-                        VALUES (%s, %s, %s, %s)
-                        """,
-                        [
-                            (
-                                r["period_type"],
-                                r["bucket"],
-                                r["metric"],
-                                r["value"],
-                            )
-                            for r in seasonal_records
-                        ],
-                    )
+                _replace_gold_table(cur, _SEASONAL_DELETE, _SEASONAL_INSERT, _SEASONAL_COLS, seasonal_records)
 
-    if conn is not None:
-        _run(conn)
-    else:
-        with get_mart_conn() as own_conn:
-            _run(own_conn)
+    _with_mart_conn(conn, _run)
 
 
 def write_correlation(
@@ -168,29 +158,9 @@ def write_correlation(
     def _run(c: psycopg.Connection) -> None:
         with c.transaction():
             with c.cursor() as cur:
-                cur.execute("DELETE FROM gold.correlation")
-                if correlation_records:
-                    cur.executemany(
-                        """
-                        INSERT INTO gold.correlation
-                            (var_x, var_y, coef, computed_at)
-                        VALUES (%s, %s, %s, now())
-                        """,
-                        [
-                            (
-                                r["var_x"],
-                                r["var_y"],
-                                r["coef"],
-                            )
-                            for r in correlation_records
-                        ],
-                    )
+                _replace_gold_table(cur, _CORRELATION_DELETE, _CORRELATION_INSERT, _CORRELATION_COLS, correlation_records)
 
-    if conn is not None:
-        _run(conn)
-    else:
-        with get_mart_conn() as own_conn:
-            _run(own_conn)
+    _with_mart_conn(conn, _run)
 
 
 def write_freshness(
@@ -201,22 +171,9 @@ def write_freshness(
     def _run(c: psycopg.Connection) -> None:
         with c.transaction():
             with c.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO gold.data_freshness (id, latest_silver_ts, computed_at)
-                    VALUES (1, %s, now())
-                    ON CONFLICT (id) DO UPDATE
-                    SET latest_silver_ts = EXCLUDED.latest_silver_ts,
-                        computed_at = now()
-                    """,
-                    (latest_silver_ts,),
-                )
+                _upsert_freshness(cur, latest_silver_ts)
 
-    if conn is not None:
-        _run(conn)
-    else:
-        with get_mart_conn() as own_conn:
-            _run(own_conn)
+    _with_mart_conn(conn, _run)
 
 
 def write_all_analysis_results(
@@ -235,127 +192,23 @@ def write_all_analysis_results(
     if latest_silver_ts is None:
         raise ValueError("latest_silver_ts không được rỗng khi cập nhật Data Mart.")
 
+    table_specs = (
+        (_RESAMPLED_DELETE, _RESAMPLED_INSERT, _RESAMPLED_COLS, resampled_records),
+        (_HISTOGRAM_DELETE, _HISTOGRAM_INSERT, _HISTOGRAM_COLS, histogram_records),
+        (_TREND_DELETE, _TREND_INSERT, _TREND_COLS, trend_records),
+        (_SEASONAL_DELETE, _SEASONAL_INSERT, _SEASONAL_COLS, seasonal_records),
+        (_CORRELATION_DELETE, _CORRELATION_INSERT, _CORRELATION_COLS, correlation_records),
+    )
+
     def _execute_in_transaction(c: psycopg.Connection) -> None:
         with c.transaction():
             with c.cursor() as cur:
-                # 1. Ghi gold.timeseries_resampled
-                cur.execute("DELETE FROM gold.timeseries_resampled")
-                if resampled_records:
-                    cur.executemany(
-                        """
-                        INSERT INTO gold.timeseries_resampled
-                            (granularity, ts, metric, mean, min, max)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        """,
-                        [
-                            (
-                                r["granularity"],
-                                r["ts"],
-                                r["metric"],
-                                r["mean"],
-                                r["min"],
-                                r["max"],
-                            )
-                            for r in resampled_records
-                        ],
-                    )
+                for delete_sql, insert_sql, columns, records in table_specs:
+                    _replace_gold_table(cur, delete_sql, insert_sql, columns, records)
+                # Cập nhật gold.data_freshness sau khi toàn bộ tác vụ thành công
+                _upsert_freshness(cur, latest_silver_ts)
 
-                # 2. Ghi gold.histogram
-                cur.execute("DELETE FROM gold.histogram")
-                if histogram_records:
-                    cur.executemany(
-                        """
-                        INSERT INTO gold.histogram
-                            (metric, bin_start, bin_end, count)
-                        VALUES (%s, %s, %s, %s)
-                        """,
-                        [
-                            (
-                                r["metric"],
-                                r["bin_start"],
-                                r["bin_end"],
-                                r["count"],
-                            )
-                            for r in histogram_records
-                        ],
-                    )
-
-                # 3. Ghi gold.trend
-                cur.execute("DELETE FROM gold.trend")
-                if trend_records:
-                    cur.executemany(
-                        """
-                        INSERT INTO gold.trend
-                            (granularity, ts, metric, trend_value)
-                        VALUES (%s, %s, %s, %s)
-                        """,
-                        [
-                            (
-                                r["granularity"],
-                                r["ts"],
-                                r["metric"],
-                                r["trend_value"],
-                            )
-                            for r in trend_records
-                        ],
-                    )
-
-                # 4. Ghi gold.seasonal
-                cur.execute("DELETE FROM gold.seasonal")
-                if seasonal_records:
-                    cur.executemany(
-                        """
-                        INSERT INTO gold.seasonal
-                            (period_type, bucket, metric, value)
-                        VALUES (%s, %s, %s, %s)
-                        """,
-                        [
-                            (
-                                r["period_type"],
-                                r["bucket"],
-                                r["metric"],
-                                r["value"],
-                            )
-                            for r in seasonal_records
-                        ],
-                    )
-
-                # 5. Ghi gold.correlation
-                cur.execute("DELETE FROM gold.correlation")
-                if correlation_records:
-                    cur.executemany(
-                        """
-                        INSERT INTO gold.correlation
-                            (var_x, var_y, coef, computed_at)
-                        VALUES (%s, %s, %s, now())
-                        """,
-                        [
-                            (
-                                r["var_x"],
-                                r["var_y"],
-                                r["coef"],
-                            )
-                            for r in correlation_records
-                        ],
-                    )
-
-                # 6. Cập nhật gold.data_freshness sau khi toàn bộ tác vụ thành công
-                cur.execute(
-                    """
-                    INSERT INTO gold.data_freshness (id, latest_silver_ts, computed_at)
-                    VALUES (1, %s, now())
-                    ON CONFLICT (id) DO UPDATE
-                    SET latest_silver_ts = EXCLUDED.latest_silver_ts,
-                        computed_at = now()
-                    """,
-                    (latest_silver_ts,),
-                )
-
-    if conn is not None:
-        _execute_in_transaction(conn)
-    else:
-        with get_mart_conn() as own_conn:
-            _execute_in_transaction(own_conn)
+    _with_mart_conn(conn, _execute_in_transaction)
 
     log.info(
         "Ghi Data Mart thành công: %d resampled, %d histogram, %d trend, %d seasonal, %d correlation. Freshness: %s",
