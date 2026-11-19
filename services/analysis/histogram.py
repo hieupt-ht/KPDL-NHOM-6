@@ -88,4 +88,3 @@ def compute_histogram_records(
 
     log.info("Tính toán histogram thành công: %d bins cho %d metrics", len(records), len(metrics))
     return records
-

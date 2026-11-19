@@ -58,7 +58,7 @@ def test_individual_compute_tasks(sample_silver_df):
     with patch("tasks.fetch_silver_metrics", return_value=sample_silver_df), \
          patch("tasks.write_resampled") as mock_resampled, \
          patch("tasks.write_histogram") as mock_hist, \
-         patch("tasks.write_trend") as mock_trend, \
+         patch("tasks.write_trend"), \
          patch("tasks.write_seasonal") as mock_seasonal, \
          patch("tasks.write_correlation") as mock_corr:
 

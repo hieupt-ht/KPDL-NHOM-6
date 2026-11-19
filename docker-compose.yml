@@ -3,6 +3,7 @@ name: cyber-radar-vn
 x-python-env: &python-env
   PYTHONPATH: /app
   AUTH_ENABLED: ${AUTH_ENABLED:-false}
+  JOB_TRIGGER_TOKEN: ${JOB_TRIGGER_TOKEN:-}
   SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-true}
   TZ_LOCAL: ${TZ_LOCAL:-Asia/Ho_Chi_Minh}
 
@@ -58,9 +59,21 @@ services:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_BOOTSTRAP_ADMIN_USERNAME}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD}
       KC_HOSTNAME: http://localhost:8080
+      KC_HEALTH_ENABLED: "true"
+      JAVA_OPTS_KC_HEAP: "-Xms64m -Xmx384m"
+      JAVA_OPTS_APPEND: "-XX:ActiveProcessorCount=2"
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:?set KEYCLOAK_CLIENT_SECRET}
+      KEYCLOAK_DEMO_PASSWORD: ${KEYCLOAK_DEMO_PASSWORD:?set KEYCLOAK_DEMO_PASSWORD}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD}
     volumes:
-      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/cyber-radar-realm.json:ro
     ports: ["8080:8080"]
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9000; printf 'GET /health/ready HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3; IFS= read -r line <&3; [[ \"$$line\" == *' 200 '* ]]"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
     networks: [cyber-net]
 
   ingestion:
@@ -84,7 +97,7 @@ services:
       WAREHOUSE_DSN: postgresql://logic_user:${LOGIC_DB_PASSWORD}@warehouse-db:5432/${WAREHOUSE_DB}
       MART_DSN: postgresql://logic_user:${LOGIC_DB_PASSWORD}@mart-db:5432/${MART_DB}
       ANALYSIS_INTERVAL_SECONDS: ${ANALYSIS_INTERVAL_SECONDS:-300}
-    ports: ["8001:8001"]
+    ports: ["127.0.0.1:8001:8001"]
     depends_on:
       warehouse-db: {condition: service_healthy}
       mart-db: {condition: service_healthy}
@@ -101,7 +114,7 @@ services:
       MART_DSN: postgresql://logic_user:${LOGIC_DB_PASSWORD}@mart-db:5432/${MART_DB}
       CLUSTERING_CRON_HOUR: ${CLUSTERING_CRON_HOUR:-0}
       CLUSTERING_CRON_MINUTE: ${CLUSTERING_CRON_MINUTE:-30}
-    ports: ["8002:8002"]
+    ports: ["127.0.0.1:8002:8002"]
     depends_on:
       warehouse-db: {condition: service_healthy}
       mart-db: {condition: service_healthy}
@@ -117,7 +130,7 @@ services:
       WAREHOUSE_DSN: postgresql://logic_user:${LOGIC_DB_PASSWORD}@warehouse-db:5432/${WAREHOUSE_DB}
       MART_DSN: postgresql://logic_user:${LOGIC_DB_PASSWORD}@mart-db:5432/${MART_DB}
       PREDICTION_INTERVAL_SECONDS: ${PREDICTION_INTERVAL_SECONDS:-300}
-    ports: ["8003:8003"]
+    ports: ["127.0.0.1:8003:8003"]
     depends_on:
       warehouse-db: {condition: service_healthy}
       mart-db: {condition: service_healthy}
@@ -132,21 +145,37 @@ services:
       <<: *python-env
       MART_DSN: postgresql://api_user:${API_DB_PASSWORD}@mart-db:5432/${MART_DB}
       KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER}
-      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID}
-      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+      KEYCLOAK_JWKS_URL: http://keycloak:8080/realms/cyber-radar/protocol/openid-connect/certs
+      KEYCLOAK_AUDIENCE: ${KEYCLOAK_AUDIENCE:-cyber-radar-api}
+      JWKS_TIMEOUT_SECONDS: ${JWKS_TIMEOUT_SECONDS:-5}
+      DB_CONNECT_TIMEOUT_SECONDS: ${DB_CONNECT_TIMEOUT_SECONDS:-5}
+      DB_STATEMENT_TIMEOUT_MS: ${DB_STATEMENT_TIMEOUT_MS:-10000}
+      JOB_REQUEST_TIMEOUT_SECONDS: ${JOB_REQUEST_TIMEOUT_SECONDS:-10}
+      ANALYSIS_URL: http://analysis:8001
+      CLUSTERING_URL: http://clustering:8002
+      PREDICTION_URL: http://prediction:8003
     ports: ["8000:8000"]
     depends_on:
       mart-db: {condition: service_healthy}
-      keycloak: {condition: service_started}
+      keycloak: {condition: service_healthy}
     healthcheck:
       <<: *python-health
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
     networks: [cyber-net]
 
   frontend:
-    build: {context: ./frontend, dockerfile: Dockerfile}
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        NEXT_PUBLIC_DATA_MODE: ${NEXT_PUBLIC_DATA_MODE:-demo}
     environment:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      NEXT_PUBLIC_DATA_MODE: ${NEXT_PUBLIC_DATA_MODE:-demo}
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
+      API_INTERNAL_URL: http://api:8000
+      KEYCLOAK_INTERNAL_ISSUER: http://keycloak:8080/realms/cyber-radar
       AUTH_SECRET: ${AUTH_SECRET}
       KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER}
       KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID}
@@ -154,7 +183,7 @@ services:
     ports: ["3000:3000"]
     depends_on:
       api: {condition: service_healthy}
-      keycloak: {condition: service_started}
+      keycloak: {condition: service_healthy}
     networks: [cyber-net]
 
 volumes:

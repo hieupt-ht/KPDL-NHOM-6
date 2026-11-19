@@ -137,4 +137,3 @@ def compute_correlation_records(
 
     log.info("Tính toán tương quan thành công: %d cặp hệ số", len(records))
     return records
-

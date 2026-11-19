@@ -1,19 +1,39 @@
 {
   "realm": "cyber-radar",
   "enabled": true,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "registrationAllowed": false,
   "roles": {"realm": [{"name": "viewer"}, {"name": "admin"}]},
-  "clients": [{
-    "clientId": "dashboard",
-    "enabled": true,
-    "protocol": "openid-connect",
-    "publicClient": false,
-    "secret": "change-me-client-secret",
-    "standardFlowEnabled": true,
-    "redirectUris": ["http://localhost:3000/*"],
-    "webOrigins": ["http://localhost:3000"]
-  }],
+  "clients": [
+    {"clientId": "cyber-radar-api", "enabled": true, "protocol": "openid-connect", "bearerOnly": true},
+    {
+      "clientId": "dashboard",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "${KEYCLOAK_CLIENT_SECRET}",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": ["http://localhost:3000/api/auth/callback/keycloak"],
+      "webOrigins": ["http://localhost:3000"],
+      "attributes": {"pkce.code.challenge.method": "S256", "post.logout.redirect.uris": "http://localhost:3000/"},
+      "protocolMappers": [
+        {
+          "name": "api-audience", "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {"included.client.audience": "cyber-radar-api", "access.token.claim": "true", "id.token.claim": "false"}
+        },
+        {
+          "name": "realm-roles", "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": {"claim.name": "realm_access.roles", "jsonType.label": "String", "multivalued": "true", "access.token.claim": "true", "id.token.claim": "false"}
+        }
+      ]
+    }
+  ],
   "users": [
-    {"username": "demo", "enabled": true, "credentials": [{"type": "password", "value": "changeme", "temporary": false}], "realmRoles": ["viewer"]},
-    {"username": "admin", "enabled": true, "credentials": [{"type": "password", "value": "changeme", "temporary": false}], "realmRoles": ["admin"]}
+    {"username": "demo", "firstName": "Demo", "lastName": "Viewer", "email": "viewer@example.test", "emailVerified": true, "enabled": true, "credentials": [{"type": "password", "value": "${KEYCLOAK_DEMO_PASSWORD}", "temporary": false}], "realmRoles": ["viewer"]},
+    {"username": "admin", "firstName": "Demo", "lastName": "Admin", "email": "admin@example.test", "emailVerified": true, "enabled": true, "credentials": [{"type": "password", "value": "${KEYCLOAK_ADMIN_PASSWORD}", "temporary": false}], "realmRoles": ["admin"]}
   ]
 }

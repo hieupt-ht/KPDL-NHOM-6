@@ -83,7 +83,9 @@ def compute_correlation() -> None:
     records = compute_correlation_records(df)
     if records:
         write_correlation(records)
-        log.info("compute_correlation hoàn thành: %d cặp correlation đã lưu.", len(records))
+        log.info(
+            "compute_correlation hoàn thành: %d cặp correlation đã lưu.", len(records)
+        )
 
 
 def run_all() -> None:
@@ -109,17 +111,25 @@ def run_all() -> None:
     latest_ts = get_latest_silver_ts()
 
     if df.empty or latest_ts is None:
-        log.warning("Silver rỗng hoặc không có dữ liệu hợp lệ. Bỏ qua chu kỳ và không ghi đè Data Mart.")
+        log.warning(
+            "Silver rỗng hoặc không có dữ liệu hợp lệ. Bỏ qua chu kỳ và không ghi đè Data Mart."
+        )
         return
 
     # 2. Đánh giá Data Quality & Anomaly Detection
     quality_report = evaluate_data_quality(df)
     if not quality_report.is_usable:
-        log.warning("Dữ liệu Silver không đủ điều kiện sử dụng (unusable). Dừng chu kỳ phân tích.")
+        log.warning(
+            "Dữ liệu Silver không đủ điều kiện sử dụng (unusable). Dừng chu kỳ phân tích."
+        )
         return
 
     if quality_report.issues_detected:
-        log.warning("Phát hiện %d vấn đề chất lượng dữ liệu: %s", len(quality_report.issues_detected), quality_report.issues_detected)
+        log.warning(
+            "Phát hiện %d vấn đề chất lượng dữ liệu: %s",
+            len(quality_report.issues_detected),
+            quality_report.issues_detected,
+        )
 
     # 3. Tính toán các thành phần phân tích
     resampled_records = compute_resampling_records(df)

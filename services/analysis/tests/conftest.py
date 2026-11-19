@@ -37,4 +37,3 @@ def long_sample_silver_df() -> pd.DataFrame:
         rows.append({"ts": ts, "metric": "http_traffic", "value": val})
         rows.append({"ts": ts, "metric": "l7_attack", "value": 0.1 + 0.05 * np.cos(h / 24.0)})
     return pd.DataFrame(rows)
-

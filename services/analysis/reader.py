@@ -74,4 +74,3 @@ def fetch_silver_metrics(
     df["metric"] = df["metric"].astype(str)
     df["value"] = pd.to_numeric(df["value"], errors="coerce")
     return df
-

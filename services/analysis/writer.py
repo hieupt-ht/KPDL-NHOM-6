@@ -158,7 +158,13 @@ def write_correlation(
     def _run(c: psycopg.Connection) -> None:
         with c.transaction():
             with c.cursor() as cur:
-                _replace_gold_table(cur, _CORRELATION_DELETE, _CORRELATION_INSERT, _CORRELATION_COLS, correlation_records)
+                _replace_gold_table(
+                    cur,
+                    _CORRELATION_DELETE,
+                    _CORRELATION_INSERT,
+                    _CORRELATION_COLS,
+                    correlation_records,
+                )
 
     _with_mart_conn(conn, _run)
 

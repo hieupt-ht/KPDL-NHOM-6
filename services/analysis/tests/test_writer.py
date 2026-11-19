@@ -139,10 +139,16 @@ def test_individual_writers():
     mock_conn.cursor.return_value.__enter__.return_value = mock_cur
 
     now = datetime(2026, 11, 1, 0, 0, tzinfo=timezone.utc)
-    write_resampled([{"granularity": "day", "ts": now, "metric": "http_traffic", "mean": 1.0, "min": 0.5, "max": 1.5}], conn=mock_conn)
+    write_resampled(
+        [{"granularity": "day", "ts": now, "metric": "http_traffic", "mean": 1.0, "min": 0.5, "max": 1.5}],
+        conn=mock_conn,
+    )
     write_histogram([{"metric": "http_traffic", "bin_start": 0.0, "bin_end": 1.0, "count": 10}], conn=mock_conn)
     write_trend([{"granularity": "week", "ts": now, "metric": "http_traffic", "trend_value": 0.9}], conn=mock_conn)
-    write_seasonal([{"period_type": "hour_of_day", "bucket": 10, "metric": "http_traffic", "value": 1.1}], conn=mock_conn)
+    write_seasonal(
+        [{"period_type": "hour_of_day", "bucket": 10, "metric": "http_traffic", "value": 1.1}],
+        conn=mock_conn,
+    )
     write_correlation([{"var_x": "http_traffic", "var_y": "l7_attack", "coef": 0.75}], conn=mock_conn)
     write_freshness(now, conn=mock_conn)
 

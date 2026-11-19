@@ -2,7 +2,6 @@
 
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
-import pandas as pd
 
 from reader import fetch_silver_metrics, get_latest_silver_ts
 
@@ -54,4 +53,3 @@ def test_fetch_silver_metrics_empty():
     df = fetch_silver_metrics(conn=mock_conn)
     assert df.empty
     assert list(df.columns) == ["ts", "metric", "value"]
-

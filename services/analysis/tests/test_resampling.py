@@ -1,7 +1,6 @@
 """Kiểm thử tổng hợp chuỗi thời gian (Resampling) toàn diện."""
 
 from datetime import datetime, timezone
-import numpy as np
 import pandas as pd
 
 from resampling import compute_resampling_records

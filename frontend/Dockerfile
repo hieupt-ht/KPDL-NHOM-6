@@ -7,7 +7,11 @@ FROM node:22-alpine AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-RUN npm run build
+ARG NEXT_PUBLIC_DATA_MODE=demo
+ARG NEXT_PUBLIC_API_URL=http://localhost:8000
+ENV NEXT_PUBLIC_DATA_MODE=$NEXT_PUBLIC_DATA_MODE
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+RUN npm run test:unit && npm run lint && npm run build
 
 FROM node:22-alpine AS runner
 WORKDIR /app

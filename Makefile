@@ -1,4 +1,4 @@
-.PHONY: up down logs ps reset-mart psql-warehouse psql-mart
+.PHONY: up down logs ps reset-mart psql-warehouse psql-mart test-api test-api-unit test-api-integration
 up:
 	docker compose up -d --build
 down:
@@ -13,3 +13,9 @@ psql-warehouse:
 	docker compose exec warehouse-db sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'
 psql-mart:
 	docker compose exec mart-db sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'
+test-api:
+	bash services/api/tests/run.sh all
+test-api-unit:
+	bash services/api/tests/run.sh unit
+test-api-integration:
+	bash services/api/tests/run.sh integration

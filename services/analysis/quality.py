@@ -239,4 +239,3 @@ def evaluate_data_quality(df: pd.DataFrame) -> QualityReport:
         len(report.issues_detected),
     )
     return report
-

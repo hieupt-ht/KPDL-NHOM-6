@@ -50,7 +50,10 @@ def _prepare_regular_series(
         return None
 
     # Kiểm tra xem có bị thiếu mốc ở giữa hay không bằng cách tạo full range
-    full_range = pd.date_range(start=grouped.index.min(), end=grouped.index.max(), freq="MS" if freq == "M" else "W-MON")
+    full_range_freq = "MS" if freq == "M" else "W-MON"
+    full_range = pd.date_range(
+        start=grouped.index.min(), end=grouped.index.max(), freq=full_range_freq
+    )
     if len(full_range) != len(grouped):
         # Có mốc thời gian bị khuyết ở giữa chuỗi
         log.warning(
@@ -62,7 +65,7 @@ def _prepare_regular_series(
         # Vì yêu cầu: 'Không nội suy hoặc tạo dữ liệu giả để đủ điều kiện', nếu chuỗi bị đứt quãng không thể decompose
         return None
 
-    grouped.index = pd.DatetimeIndex(grouped.index, freq="MS" if freq == "M" else "W-MON")
+    grouped.index = pd.DatetimeIndex(grouped.index, freq=full_range_freq)
     return grouped
 
 
@@ -127,7 +130,11 @@ def decompose_metric_trend(
                         "metric": metric_name,
                         "trend_value": float(val),
                     })
-            log.info("Metric '%s': Tách trend thành công trên chuỗi tuần fallback (%d điểm trend)", metric_name, len(records))
+            log.info(
+                "Metric '%s': Tách trend thành công trên chuỗi tuần fallback (%d điểm trend)",
+                metric_name,
+                len(records),
+            )
             return records
         except Exception as exc:
             log.warning("Không thể phân tích trend chuỗi tuần cho '%s': %s", metric_name, exc)
