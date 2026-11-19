@@ -127,23 +127,30 @@ def test_trend_insufficient_data_skips_cleanly():
 
 
 def test_trend_prefers_month_when_sufficient():
-    # Tạo 25 tháng liên tục (đủ >= 24 tháng cho period=12)
+    # 25 tháng liên tiếp, mỗi tháng một điểm đầu tháng (đủ >= 24 tháng cho period=12)
     base = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
     rows = []
     current_ts = base
-    for m in range(26):
+    for m in range(25):
         rows.append({
             "ts": current_ts,
             "metric": "http_traffic",
             "value": 1.0 + 0.1 * np.sin(m),
         })
-        current_ts = current_ts + timedelta(days=32)
+        # Nhảy sang đầu tháng tiếp theo một cách xác định
+        current_ts = (current_ts.replace(day=28) + timedelta(days=6)).replace(day=1)
 
     df = pd.DataFrame(rows)
     records = compute_trend_records(df, metrics=["http_traffic"])
-    if records:
-        granularities = {r["granularity"] for r in records}
-        assert "month" in granularities
+    assert len(records) > 0
+    granularities = {r["granularity"] for r in records}
+    assert "month" in granularities
+    assert "week" not in granularities
+    # Timestamp kết quả phải là đầu tháng giờ VN (00:00:00, day == 1)
+    for r in records:
+        assert r["ts"].day == 1
+        assert r["ts"].hour == 0
+        assert r["ts"].tzinfo is not None
 
 
 def test_trend_incomplete_interior_bucket_rejected():

@@ -151,7 +151,7 @@ def test_quality_unusable_when_insufficient_records():
 
 
 def test_anomaly_distinguishes_attack_surge_from_statistical_outlier():
-    # http_traffic có đột biến lớn vượt Q3 + 3*IQR -> ATTACK_OR_TRAFFIC_SURGE
+    # http_traffic có đột biến lớn vượt Q3 + 3*IQR -> TRAFFIC_ANOMALY_CANDIDATE (không tự kết luận tấn công)
     base = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
     rows = []
     # 25 bản ghi bình thường quanh 1.0, bản ghi thứ 26 là 100.0 (đột biến lớn)
@@ -165,7 +165,68 @@ def test_anomaly_distinguishes_attack_surge_from_statistical_outlier():
     assert len(summary.anomaly_samples) > 0
     surge_sample = next((s for s in summary.anomaly_samples if s["value"] == 100.0), None)
     assert surge_sample is not None
-    assert surge_sample["category"] == "ATTACK_OR_TRAFFIC_SURGE"
+    assert surge_sample["category"] == "TRAFFIC_ANOMALY_CANDIDATE"
+    assert surge_sample["metric"] == "http_traffic"
+    assert "detection_method" in surge_sample
+    assert surge_sample["detection_method"] in ("ROBUST_Z", "IQR", "ROBUST_Z+IQR")
+
+
+def test_anomaly_statistical_outlier_not_labeled_attack():
+    # Outlier trên bot_share (tỷ lệ bot) chỉ được coi là biến động thống kê ngoại lai,
+    # không được tự ý gán nhãn là cuộc tấn công mạng
+    base = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    rows = []
+    for i in range(25):
+        rows.append({"ts": base + timedelta(hours=i), "metric": "bot_share", "value": 10.0 + 0.1 * i})
+    rows.append({"ts": base + timedelta(hours=25), "metric": "bot_share", "value": 85.0})
+
+    df = pd.DataFrame(rows)
+    report = evaluate_data_quality(df)
+    summary = report.metrics_summary["bot_share"]
+    assert len(summary.anomaly_samples) > 0
+    sample = next((s for s in summary.anomaly_samples if s["value"] == 85.0), None)
+    assert sample is not None
+    assert sample["category"] == "STATISTICAL_OUTLIER"
+    assert sample["metric"] == "bot_share"
+    assert sample["detection_method"] in ("ROBUST_Z", "IQR", "ROBUST_Z+IQR")
+
+
+def test_quality_partial_status_when_one_metric_insufficient():
+    # 4 metrics đủ điều kiện (>= 24 bản ghi), 1 metric (netflows) chỉ có 5 bản ghi (< 24)
+    # -> status phải là 'partial', is_usable là True (không chặn toàn bộ pipeline)
+    base = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    rows = []
+    for i in range(25):
+        ts = base + timedelta(hours=i)
+        rows.append({"ts": ts, "metric": "http_traffic", "value": 1.0 + float(i)})
+        rows.append({"ts": ts, "metric": "l7_attack", "value": 0.5})
+        rows.append({"ts": ts, "metric": "bot_share", "value": 20.0})
+        rows.append({"ts": ts, "metric": "human_share", "value": 80.0})
+    for i in range(5):
+        rows.append({"ts": base + timedelta(hours=i), "metric": "netflows", "value": 100.0})
+
+    df = pd.DataFrame(rows)
+    report = evaluate_data_quality(df)
+
+    assert report.status == "partial"
+    assert report.is_usable is True
+    assert report.metrics_summary["http_traffic"].is_sufficient is True
+    assert report.metrics_summary["netflows"].is_sufficient is False
+    assert any("netflows" in issue for issue in report.issues_detected)
+
+
+def test_quality_temporal_coverage_calculation():
+    # 00:00, 01:00, 03:00 -> expected = 4 giờ, actual = 3 giờ -> coverage = 3/4 = 0.75
+    base = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    df = pd.DataFrame([
+        {"ts": base + timedelta(hours=0), "metric": "http_traffic", "value": 1.0},
+        {"ts": base + timedelta(hours=1), "metric": "http_traffic", "value": 2.0},
+        {"ts": base + timedelta(hours=3), "metric": "http_traffic", "value": 3.0},
+    ])
+    report = evaluate_data_quality(df)
+    s = report.metrics_summary["http_traffic"]
+    assert s.missing_hours_count == 1
+    assert s.temporal_coverage == 0.75
 
 
 def test_algorithm_fitness_evaluation():

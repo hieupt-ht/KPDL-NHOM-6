@@ -1,6 +1,7 @@
 """Các tác vụ phân tích Silver thành Gold."""
 
 import logging
+import numpy as np
 
 from quality import evaluate_data_quality
 from reader import fetch_silver_metrics
@@ -122,20 +123,26 @@ def run_all() -> str:
         )
         return "skipped"
 
-    # Lấy latest_silver_ts trực tiếp từ dữ liệu đã tải — đảm bảo nhất quán với df
-    ts_col = df["ts"].dropna()
-    if ts_col.empty:
-        log.warning("Cột ts không có giá trị hợp lệ. Bỏ qua chu kỳ.")
+    # Lấy latest_silver_ts từ mốc thời gian có giá trị hợp lệ (NOT NULL, hữu hạn)
+    valid_mask = df["value"].notna() & ~np.isinf(df["value"])
+    valid_ts = df.loc[valid_mask, "ts"].dropna()
+    if valid_ts.empty:
+        log.warning("Không có mốc thời gian nào có giá trị hợp lệ. Bỏ qua chu kỳ.")
         return "failed"
-    latest_ts = ts_col.max().to_pydatetime()
+    latest_ts = valid_ts.max().to_pydatetime()
 
     # 2. Đánh giá Data Quality & Anomaly Detection
     quality_report = evaluate_data_quality(df)
-    if not quality_report.is_usable:
+    if quality_report.status == "unusable":
         log.warning(
             "Dữ liệu Silver không đủ điều kiện sử dụng (unusable). Dừng chu kỳ phân tích."
         )
         return "failed"
+
+    if quality_report.status == "partial":
+        log.info(
+            "Dữ liệu Silver đạt trạng thái một phần (partial). Pipeline tiếp tục xử lý các metric và thuật toán hợp lệ."
+        )
 
     if quality_report.issues_detected:
         log.warning(

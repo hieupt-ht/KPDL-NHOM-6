@@ -73,7 +73,7 @@ def compute_correlation_records(
     Quy định:
     - Căn chỉnh dữ liệu theo timestamp.
     - Xử lý missing theo từng cặp quan sát (pairwise complete observations).
-    - Bỏ qua các cặp có số quan sát < 2 hoặc zero-variance.
+    - Bỏ qua các cặp có số quan sát < 3 hoặc zero-variance.
     - Không lưu NaN, Infinity hoặc tự tiện thay hệ số không xác định bằng 0.
     - Đảm bảo tính đối xứng và hệ số thuộc [-1, 1].
     """

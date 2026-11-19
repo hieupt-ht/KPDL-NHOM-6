@@ -13,6 +13,8 @@
 from collections.abc import Callable, Sequence
 from datetime import datetime
 import logging
+import math
+from numbers import Integral, Real
 from typing import Any
 
 import psycopg
@@ -70,6 +72,30 @@ _FRESHNESS_UPSERT = """
 """
 
 
+def _validate_finite_values(
+    records: Sequence[dict[str, Any]],
+    columns: tuple[str, ...],
+) -> None:
+    """Từ chối ghi NaN/Infinity vào các cột đo lường số thực.
+
+    PostgreSQL DOUBLE PRECISION chấp nhận giá trị 'NaN', nên nếu thuật toán
+    lỡ trả về giá trị không hữu hạn, nó sẽ được ghi thẳng vào Gold mà không
+    có lỗi nào được báo. Kiểm tra tại đây để lỗi rollback toàn bộ transaction.
+    """
+    for row_idx, record in enumerate(records):
+        for col in columns:
+            value = record[col]
+            if (
+                isinstance(value, Real)
+                and not isinstance(value, Integral)
+                and not math.isfinite(value)
+            ):
+                raise ValueError(
+                    f"Giá trị không hữu hạn (NaN/Infinity) tại bản ghi #{row_idx}, "
+                    f"cột '{col}': {value!r}. Từ chối ghi vào Gold."
+                )
+
+
 def _replace_gold_table(
     cur: psycopg.Cursor,
     delete_sql: str,
@@ -84,6 +110,7 @@ def _replace_gold_table(
     """
     if not records:
         return
+    _validate_finite_values(records, columns)
     cur.execute(delete_sql)
     cur.executemany(insert_sql, [tuple(r[c] for c in columns) for r in records])
 
@@ -200,6 +227,8 @@ def write_all_analysis_results(
 
     Đối với mỗi bảng Gold: chỉ xóa và ghi lại khi kết quả mới không rỗng.
     Bảng có kết quả rỗng (ví dụ trend không đủ dữ liệu) được giữ nguyên dữ liệu cũ.
+    Nếu tất cả kết quả đều rỗng: không ghi gì và không cập nhật gold.data_freshness,
+    tránh báo cáo freshness "thành công" khi chưa có kết quả hợp lệ nào.
     Nếu bất kỳ thao tác nào thất bại, toàn bộ transaction bị rollback.
     Nếu latest_silver_ts là None, hàm này không được gọi.
     """
@@ -213,6 +242,13 @@ def write_all_analysis_results(
         (_SEASONAL_DELETE, _SEASONAL_INSERT, _SEASONAL_COLS, seasonal_records),
         (_CORRELATION_DELETE, _CORRELATION_INSERT, _CORRELATION_COLS, correlation_records),
     )
+
+    if not any(spec[3] for spec in table_specs):
+        log.warning(
+            "Không có kết quả phân tích mới nào. Giữ nguyên toàn bộ Gold "
+            "và không cập nhật gold.data_freshness."
+        )
+        return
 
     def _execute_in_transaction(c: psycopg.Connection) -> None:
         with c.transaction():

@@ -38,6 +38,7 @@ class MetricQualitySummary:
     duplicate_count: int = 0
     invalid_value_count: int = 0
     missing_hours_count: int = 0
+    temporal_coverage: float = 1.0
     min_value: float | None = None
     max_value: float | None = None
     mean_value: float | None = None
@@ -63,9 +64,11 @@ class QualityReport:
     metrics_summary: dict[str, MetricQualitySummary]
     issues_detected: list[str] = field(default_factory=list)
     algorithm_fitness: dict[str, bool] = field(default_factory=dict)
+    status: str = "usable"  # 'usable', 'partial', 'unusable'
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "status": self.status,
             "is_usable": self.is_usable,
             "total_rows": self.total_rows,
             "issues": self.issues_detected,
@@ -143,6 +146,15 @@ def evaluate_data_quality(df: pd.DataFrame) -> QualityReport:
         )
 
     total_rows = len(df)
+
+    # Kiểm tra nguồn dữ liệu (source): không trộn lẫn nhiều nguồn trong một chu kỳ
+    if "source" in df.columns:
+        sources = df["source"].dropna().unique().tolist()
+        if len(sources) > 1:
+            msg = f"Phát hiện trộn lẫn nhiều nguồn dữ liệu ({sources}) trong cùng một chu kỳ phân tích."
+            issues.append(msg)
+            log.warning(msg)
+
     grouped = df.groupby("metric")
 
     for metric_name, group in grouped:
@@ -190,7 +202,7 @@ def evaluate_data_quality(df: pd.DataFrame) -> QualityReport:
         valid_vals = valid_df["value"].to_numpy(dtype=float)
         summary.valid_records = len(valid_vals)
 
-        # 4. Kiểm tra khoảng thời gian bị thiếu (gaps > 1h)
+        # 4. Kiểm tra khoảng thời gian bị thiếu (gaps > 1h) và độ phủ thời gian
         if len(valid_df) >= 2:
             ts_series = valid_df["ts"].drop_duplicates()
             total_sec = (ts_series.max() - ts_series.min()).total_seconds()
@@ -198,8 +210,17 @@ def evaluate_data_quality(df: pd.DataFrame) -> QualityReport:
             actual_hours = len(ts_series)
             missing = max(0, expected_hours - actual_hours)
             summary.missing_hours_count = missing
+            summary.temporal_coverage = (
+                round(actual_hours / expected_hours, 4) if expected_hours > 0 else 1.0
+            )
             if missing > 0:
                 log.info("Metric '%s' thiếu %d mốc giờ trong khoảng khảo sát.", metric_name, missing)
+        elif len(valid_df) == 1:
+            summary.temporal_coverage = 1.0
+            summary.missing_hours_count = 0
+        else:
+            summary.temporal_coverage = 0.0
+            summary.missing_hours_count = 0
 
         # 5. Phân phối và Anomaly Detection
         if summary.valid_records > 0:
@@ -223,22 +244,39 @@ def evaluate_data_quality(df: pd.DataFrame) -> QualityReport:
             anomaly_mask = outliers_z | outliers_iqr
             if np.any(anomaly_mask):
                 # Rào "far out" (Q3 + 3*IQR): chỉ đột biến vượt rào này mới xem
-                # là bằng chứng tấn công/lưu lượng bất thường trên metric mạng
+                # là nghi vấn bất thường lưu lượng mạng (TRAFFIC_ANOMALY_CANDIDATE)
                 q75 = float(np.percentile(valid_vals, 75))
                 far_upper = q75 + 3.0 * iqr if iqr > 0 else med + 3.0 * mad
-                anom_rows = valid_df[anomaly_mask].head(5)
-                for _, r in anom_rows.iterrows():
-                    is_attack_evidence = (
+                anom_indices = np.where(anomaly_mask)[0]
+                for idx in anom_indices[:5]:
+                    r = valid_df.iloc[idx]
+                    is_z = bool(outliers_z[idx])
+                    is_iqr = bool(outliers_iqr[idx])
+                    if is_z and is_iqr:
+                        method = "ROBUST_Z+IQR"
+                    elif is_z:
+                        method = "ROBUST_Z"
+                    else:
+                        method = "IQR"
+
+                    val = float(r["value"])
+                    # Không tự gán nhãn tấn công cho mọi outlier thống kê.
+                    # Phân biệt: chỉ đột biến cực lớn trên metric mạng (http_traffic, l7_attack)
+                    # mới được xem là ứng viên biến động an ninh mạng (TRAFFIC_ANOMALY_CANDIDATE),
+                    # còn lại là STATISTICAL_OUTLIER.
+                    is_attack_candidate = (
                         metric_name in ("l7_attack", "http_traffic")
-                        and float(r["value"]) > far_upper
+                        and val > far_upper
                     )
                     category = (
-                        "ATTACK_OR_TRAFFIC_SURGE" if is_attack_evidence else "STATISTICAL_OUTLIER"
+                        "TRAFFIC_ANOMALY_CANDIDATE" if is_attack_candidate else "STATISTICAL_OUTLIER"
                     )
                     summary.anomaly_samples.append({
+                        "metric": str(metric_name),
                         "ts": str(r["ts"]),
-                        "value": float(r["value"]),
+                        "value": val,
                         "category": category,
+                        "detection_method": method,
                     })
 
         summary.is_sufficient = summary.valid_records >= MIN_VALID_RECORDS_PER_METRIC
@@ -283,9 +321,26 @@ def evaluate_data_quality(df: pd.DataFrame) -> QualityReport:
         "correlation": len(valid_with_variance) >= 2,
     }
 
-    is_usable = all(
-        m in summaries and summaries[m].is_sufficient for m in ALL_METRICS
-    )
+    # Đánh giá status: usable, partial, unusable
+    # Không dùng một điều kiện chung để chặn toàn bộ pipeline khi chỉ một metric không đủ dữ liệu.
+    # usable: Tất cả 5 metrics đều đạt is_sufficient (>= 24 valid records).
+    # partial: Ít nhất 1 metric đủ dữ liệu và ít nhất 1 thuật toán chạy được, nhưng chưa đạt toàn bộ 5 metrics.
+    # unusable: Không có bất kỳ metric nào có dữ liệu hợp lệ hoặc không thuật toán nào khả thi.
+    sufficient_metrics = [
+        m for m in ALL_METRICS
+        if m in summaries and summaries[m].is_sufficient
+    ]
+    has_any_valid_metrics = any(s.valid_records > 0 for s in summaries.values())
+    can_run_any_algo = any(algorithm_fitness.values())
+
+    if not has_any_valid_metrics or not can_run_any_algo or len(sufficient_metrics) == 0:
+        status = "unusable"
+    elif len(sufficient_metrics) == len(ALL_METRICS):
+        status = "usable"
+    else:
+        status = "partial"
+
+    is_usable = (status != "unusable")
 
     report = QualityReport(
         is_usable=is_usable,
@@ -293,10 +348,12 @@ def evaluate_data_quality(df: pd.DataFrame) -> QualityReport:
         metrics_summary=summaries,
         issues_detected=issues,
         algorithm_fitness=algorithm_fitness,
+        status=status,
     )
 
     log.info(
-        "Hoàn tất kiểm tra chất lượng dữ liệu: usable=%s, tổng dòng=%d, vấn đề phát hiện=%d",
+        "Hoàn tất kiểm tra chất lượng dữ liệu: status=%s, usable=%s, tổng dòng=%d, vấn đề phát hiện=%d",
+        report.status,
         report.is_usable,
         report.total_rows,
         len(report.issues_detected),
