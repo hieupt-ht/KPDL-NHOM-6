@@ -41,6 +41,8 @@ API runner scripts build sequentially to limit peak RAM and clean up their own `
 
 `.github/workflows/backend-api.yml` runs the same Docker suite for backend PRs to develop. It uses no application secrets. See `docs/backend-api-local.md` for commands and `docs/backend-integration-handoff.md` for cross-service review points.
 
+All mode also seeds synthetic Silver in an explicitly named test database and requires the real Analysis job to produce Gold successfully through authenticated API calls. The workflow separately runs Analysis unit tests. See `docs/analysis-pipeline-validation.md`; these fixtures do not prove real Radar ingestion.
+
 Other services without a runner still import modules flat (`from features import ...`). Run their tests in Docker with the service directory and `backend` on `PYTHONPATH`. Do not collect API and ingestion tests in one pytest process: both use flat module names such as `main`.
 
 DB init scripts in `db/*/init/` only run on an empty volume. Existing databases need an explicit migration or deliberate re-initialization. Never use `docker compose down -v` against application data merely to run tests; the API test runner creates and removes its own disposable databases.

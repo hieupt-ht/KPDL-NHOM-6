@@ -117,6 +117,7 @@ services:
       TEST_MART_ADMIN_DSN: postgresql://test_admin:test-admin-only@mart-db:5432/test_mart
       TEST_MART_API_DSN: postgresql://api_user:test-api-only@mart-db:5432/test_mart
       TEST_MART_LOGIC_DSN: postgresql://logic_user:test-logic-only@mart-db:5432/test_mart
+      TEST_WAREHOUSE_ADMIN_DSN: postgresql://test_admin:test-admin-only@warehouse-db:5432/test_warehouse
       TEST_KEYCLOAK_URL: http://localhost:8080/realms/cyber-radar
       TEST_KEYCLOAK_INTERNAL_URL: http://keycloak:8080/realms/cyber-radar
       TEST_KEYCLOAK_CLIENT_SECRET: test-only-client-secret
