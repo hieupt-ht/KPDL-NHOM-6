@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RADAR / VN · Đăng nhập & Đăng ký</title>
+<!--
+  MOCKUP GIAO DIỆN ĐĂNG NHẬP / ĐĂNG KÝ  (thuần HTML + CSS + JS, không cần thư viện)
+  Màu sắc lấy từ frontend/app/globals.css nên khớp với dashboard.
+
+  Gợi ý chuyển sang Next.js:
+  - Tab hiện tại đổi qua hash: #login / #register  ->  tách thành app/login/page.tsx và app/register/page.tsx.
+  - Các thuộc tính data-* đánh dấu chỗ cần nối logic:
+      data-action="keycloak-login"     -> signIn("keycloak", { callbackUrl })
+      data-action="keycloak-register"  -> signIn("keycloak", { callbackUrl }, { prompt: "create" })
+      data-field="..."                 -> input của form (nếu giữ form riêng)
+  - Đây là mockup: mật khẩu thật nên nhập ở trang Keycloak (SSO). Form ở đây có thể giữ làm giao diện
+    hoặc rút gọn còn nút "Tiếp tục với Keycloak" tùy quyết định của nhóm.
+  - Số liệu ở panel bên trái chỉ là minh họa trang trí, KHÔNG phải dữ liệu thật.
+-->
+<style>
+:root{
+  --bg-app:#F3F6FA; --bg-surface:#FFFFFF; --bg-surface-2:#EAF0F7;
+  --border:#D9E2EC; --border-strong:#B8C7D9;
+  --navy:#0B1F3A; --navy-2:#12315A; --navy-3:#17407A;
+  --text-primary:#0F1B2D; --text-secondary:#4A5B73; --text-muted:#7A8AA0;
+  --primary:#0891B2; --primary-hover:#0E7490; --primary-soft:#E0F4F9;
+  --accent:#6366F1;
+  --ok:#10B981; --warn:#F59E0B; --bad:#EF4444; --bad-bg:#FEE2E2;
+  --focus-ring:0 0 0 3px rgba(8,145,178,.35);
+  --shadow-card:0 1px 2px rgba(11,31,58,.06),0 12px 32px rgba(11,31,58,.10);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg-app:#07121F; --bg-surface:#0E1D31; --bg-surface-2:#13263F;
+    --border:#1F3553; --border-strong:#2C4A72;
+    --text-primary:#E8EEF7; --text-secondary:#A9B8CE; --text-muted:#7F92AD;
+    --primary-soft:#0C3340; --bad-bg:#3A1518;
+    --shadow-card:0 1px 2px rgba(0,0,0,.4),0 12px 32px rgba(0,0,0,.35);
+  }
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg-app);color:var(--text-primary);
+  font-family:Inter,"Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;line-height:1.5}
+.page{min-height:100vh;display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr)}
+
+/* ---------- HERO (trái) ---------- */
+.hero{position:relative;overflow:hidden;color:#fff;padding:40px 48px;display:flex;flex-direction:column;
+  background:radial-gradient(900px 500px at 15% 0%,#17407A 0%,transparent 60%),
+             radial-gradient(700px 500px at 100% 100%,#0a5f78 0%,transparent 55%),var(--navy)}
+.hero::before{content:"";position:absolute;inset:0;opacity:.35;pointer-events:none;
+  background-image:linear-gradient(rgba(255,255,255,.06) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.06) 1px,transparent 1px);
+  background-size:48px 48px;mask-image:radial-gradient(ellipse at 40% 40%,#000 30%,transparent 75%)}
+.brand{display:flex;align-items:center;gap:12px;font-weight:800;letter-spacing:.04em;position:relative}
+.brand-mark{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;font-weight:800;
+  background:linear-gradient(135deg,#22d3ee,#0891B2 60%,#6366F1);box-shadow:0 6px 18px rgba(8,145,178,.5)}
+.hero-body{position:relative;margin:auto 0;max-width:560px;padding:32px 0}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:12px;font-weight:600;letter-spacing:.12em;
+  color:#9fe7f7;background:rgba(34,211,238,.1);border:1px solid rgba(34,211,238,.28);padding:6px 12px;border-radius:999px}
+.dot{width:7px;height:7px;border-radius:50%;background:#34d399;box-shadow:0 0 0 0 rgba(52,211,153,.7);animation:pulse 2s infinite}
+@keyframes pulse{70%{box-shadow:0 0 0 9px rgba(52,211,153,0)}100%{box-shadow:0 0 0 0 rgba(52,211,153,0)}}
+.hero h1{font-size:clamp(28px,3.4vw,44px);line-height:1.12;margin:20px 0 14px;letter-spacing:-.02em}
+.hero h1 em{font-style:normal;background:linear-gradient(90deg,#67e8f9,#a5b4fc);-webkit-background-clip:text;background-clip:text;color:transparent}
+.hero p.lead{color:#b8c8de;font-size:16px;margin:0 0 28px;max-width:480px}
+
+.signal{position:relative;border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:16px 16px 10px;
+  background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,.03));backdrop-filter:blur(6px)}
+.signal-head{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#9db3cf;margin-bottom:6px}
+.signal-head b{color:#fff;font-size:13px;letter-spacing:.04em}
+.tag{font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;background:rgba(239,68,68,.18);color:#fecaca;border:1px solid rgba(239,68,68,.4)}
+.signal svg{width:100%;height:150px;display:block}
+.line{fill:none;stroke:#22d3ee;stroke-width:2.2;stroke-linejoin:round;stroke-linecap:round;
+  stroke-dasharray:1200;stroke-dashoffset:1200;animation:draw 2.4s .2s ease forwards}
+.area{fill:url(#g1);opacity:0;animation:fade 1s 1.6s forwards}
+@keyframes draw{to{stroke-dashoffset:0}}
+@keyframes fade{to{opacity:1}}
+.spike{fill:#EF4444;opacity:0;animation:fade .4s 2.2s forwards}
+.spike-ring{fill:none;stroke:#EF4444;stroke-width:1.5;opacity:0;transform-box:fill-box;transform-origin:center;animation:ring 2s 2.3s infinite}
+@keyframes ring{0%{opacity:.9;transform:scale(.6)}100%{opacity:0;transform:scale(2.6)}}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:16px}
+.stat{padding:12px 14px;border-radius:12px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1)}
+.stat small{display:block;color:#9db3cf;font-size:11px;letter-spacing:.06em}
+.stat strong{font-size:20px;font-variant-numeric:tabular-nums}
+.stat span{font-size:11px;color:#9db3cf}
+.hero-foot{position:relative;display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:#8aa3c4}
+.hero-foot span::before{content:"✓ ";color:#34d399}
+
+/* ---------- FORM (phải) ---------- */
+.panel{display:flex;align-items:center;justify-content:center;padding:32px 24px}
+.card{width:100%;max-width:440px}
+.tabs{display:grid;grid-template-columns:1fr 1fr;padding:4px;border-radius:12px;background:var(--bg-surface-2);border:1px solid var(--border);margin-bottom:28px;position:relative}
+.tab{appearance:none;border:0;background:transparent;font:inherit;font-weight:600;font-size:14px;color:var(--text-secondary);
+  padding:10px;border-radius:9px;cursor:pointer;position:relative;z-index:1;transition:color .2s}
+.tab[aria-selected="true"]{color:var(--text-primary)}
+.tab-pill{position:absolute;top:4px;bottom:4px;left:4px;width:calc(50% - 4px);border-radius:9px;background:var(--bg-surface);
+  box-shadow:0 1px 3px rgba(11,31,58,.18);transition:transform .25s cubic-bezier(.4,0,.2,1)}
+.tabs[data-active="register"] .tab-pill{transform:translateX(100%)}
+.tab:focus-visible,.btn:focus-visible,.link:focus-visible,.icon-btn:focus-visible{outline:none;box-shadow:var(--focus-ring)}
+h2{font-size:26px;margin:0 0 6px;letter-spacing:-.015em}
+.sub{margin:0 0 24px;color:var(--text-secondary);font-size:14px}
+.view[hidden]{display:none}
+.view{animation:in .3s ease}
+@keyframes in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+.btn{appearance:none;border:1px solid var(--border-strong);background:var(--bg-surface);color:var(--text-primary);font:inherit;font-weight:600;
+  font-size:14px;height:46px;border-radius:12px;width:100%;display:flex;align-items:center;justify-content:center;gap:10px;cursor:pointer;
+  transition:background .15s,transform .05s,border-color .15s}
+.btn:hover{background:var(--bg-surface-2)}
+.btn:active{transform:translateY(1px)}
+.btn.primary{background:linear-gradient(180deg,#0aa3c6,var(--primary));border-color:var(--primary-hover);color:#fff;
+  box-shadow:0 6px 16px rgba(8,145,178,.32)}
+.btn.primary:hover{background:linear-gradient(180deg,var(--primary),var(--primary-hover))}
+.btn[disabled]{opacity:.6;cursor:progress}
+.spinner{width:16px;height:16px;border-radius:50%;border:2px solid rgba(255,255,255,.5);border-top-color:#fff;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.divider{display:flex;align-items:center;gap:12px;margin:20px 0;color:var(--text-muted);font-size:12px;letter-spacing:.08em}
+.divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--border)}
+
+.field{margin-bottom:16px}
+.field label{display:flex;justify-content:space-between;font-size:13px;font-weight:600;margin-bottom:6px}
+.input-wrap{position:relative}
+.input{width:100%;height:46px;border-radius:12px;border:1px solid var(--border-strong);background:var(--bg-surface);color:var(--text-primary);
+  font:inherit;font-size:14px;padding:0 44px 0 14px;transition:border-color .15s,box-shadow .15s}
+.input::placeholder{color:var(--text-muted)}
+.input:hover{border-color:var(--text-muted)}
+.input:focus{outline:none;border-color:var(--primary);box-shadow:var(--focus-ring)}
+.input[aria-invalid="true"]{border-color:var(--bad);box-shadow:0 0 0 3px rgba(239,68,68,.15)}
+.icon-btn{position:absolute;right:6px;top:6px;width:34px;height:34px;border:0;border-radius:8px;background:transparent;color:var(--text-muted);cursor:pointer;display:grid;place-items:center}
+.icon-btn:hover{color:var(--text-primary);background:var(--bg-surface-2)}
+.err{color:var(--bad);font-size:12px;margin-top:5px;min-height:0}
+.row{display:flex;justify-content:space-between;align-items:center;margin:4px 0 20px;font-size:13px}
+.check{font-size:13px;display:flex;gap:8px;align-items:flex-start;color:var(--text-secondary);cursor:pointer}
+.check input{margin-top:3px;accent-color:var(--primary);width:16px;height:16px}
+.link{color:var(--primary-hover);font-weight:600;text-decoration:none;background:none;border:0;font:inherit;font-weight:600;cursor:pointer;padding:0;border-radius:4px}
+.link:hover{text-decoration:underline}
+@media (prefers-color-scheme:dark){.link{color:#67e8f9}}
+.alert[hidden]{display:none}
+.alert{display:flex;gap:10px;padding:12px 14px;border-radius:12px;font-size:13px;margin-bottom:18px;background:var(--bad-bg);color:#991B1B;border:1px solid #FCA5A5}
+@media (prefers-color-scheme:dark){.alert{color:#fecaca;border-color:#7f1d1d}}
+
+.meter{display:flex;gap:6px;margin-top:8px}
+.meter i{flex:1;height:5px;border-radius:3px;background:var(--border);transition:background .2s}
+.meter-label{font-size:12px;color:var(--text-muted);margin-top:6px;display:flex;justify-content:space-between}
+.role-note{display:flex;gap:12px;align-items:flex-start;padding:12px 14px;border-radius:12px;background:var(--primary-soft);
+  border:1px solid rgba(8,145,178,.25);font-size:13px;color:var(--text-secondary);margin:6px 0 18px}
+.role-note b{color:var(--text-primary)}
+.switch{text-align:center;margin-top:22px;font-size:14px;color:var(--text-secondary)}
+.legal{margin-top:20px;text-align:center;font-size:12px;color:var(--text-muted)}
+.sso-note{display:flex;align-items:center;justify-content:center;gap:8px;font-size:12px;color:var(--text-muted);margin-top:16px}
+.ok-view{text-align:center;padding:12px 0}
+.ok-ico{width:64px;height:64px;border-radius:50%;margin:0 auto 18px;display:grid;place-items:center;background:rgba(16,185,129,.14);color:var(--ok)}
+
+@media (max-width:900px){
+  .page{grid-template-columns:1fr}
+  .hero{padding:24px 20px}
+  .hero-body{padding:20px 0 8px}
+  .hero p.lead,.stats,.hero-foot{display:none}
+  .signal svg{height:90px}
+  .panel{padding:24px 16px 40px}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}.line{stroke-dashoffset:0}.area,.spike{opacity:1}}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ===== HERO ===== -->
+  <aside class="hero" aria-label="Giới thiệu hệ thống">
+    <div class="brand"><span class="brand-mark">R</span><span>RADAR / VN</span></div>
+
+    <div class="hero-body">
+      <span class="eyebrow"><span class="dot"></span> GIÁM SÁT AN NINH MẠNG · VIỆT NAM</span>
+      <h1>Nhìn thấy <em>bất thường</em> trong lưu lượng Internet Việt Nam, trước khi nó thành sự cố.</h1>
+      <p class="lead">Phân tích chuỗi thời gian từ Cloudflare Radar, phân cụm hành vi và dự báo mức tải của ngày mai, trên một bảng điều khiển duy nhất.</p>
+
+      <div class="signal" role="img" aria-label="Biểu đồ minh họa lưu lượng HTTP với một điểm bất thường">
+        <div class="signal-head"><b>HTTP TRAFFIC · 24H</b><span class="tag">● 1 BẤT THƯỜNG</span></div>
+        <svg viewBox="0 0 520 150" preserveAspectRatio="none">
+          <defs><linearGradient id="g1" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#22d3ee" stop-opacity=".35"/><stop offset="1" stop-color="#22d3ee" stop-opacity="0"/></linearGradient></defs>
+          <g stroke="rgba(255,255,255,.08)"><path d="M0 37H520M0 75H520M0 112H520"/></g>
+          <path class="area" d="M0 110 C30 100 50 108 80 96 S130 70 160 78 S210 100 240 84 S290 40 320 30 L340 8 L360 70 S400 92 430 76 S490 60 520 66 V150 H0Z"/>
+          <path class="line" d="M0 110 C30 100 50 108 80 96 S130 70 160 78 S210 100 240 84 S290 40 320 30 L340 8 L360 70 S400 92 430 76 S490 60 520 66"/>
+          <circle class="spike-ring" cx="340" cy="8" r="7"/><circle class="spike" cx="340" cy="8" r="4.5"/>
+        </svg>
+      </div>
+
+      <div class="stats" aria-label="Số liệu minh họa">
+        <div class="stat"><small>CHỈ SỐ THEO DÕI</small><strong>6</strong><span> chuỗi thời gian</span></div>
+        <div class="stat"><small>CẬP NHẬT</small><strong>5 phút</strong><span> / lần</span></div>
+        <div class="stat"><small>DỰ BÁO</small><strong>T+1</strong><span> ngày mai</span></div>
+      </div>
+    </div>
+
+    <div class="hero-foot"><span>Xác thực SSO · OpenID Connect</span><span>Phân quyền Viewer / Admin</span><span>Dữ liệu Cloudflare Radar</span></div>
+  </aside>
+
+  <!-- ===== FORM ===== -->
+  <main class="panel">
+    <div class="card">
+      <div class="tabs" id="tabs" data-active="login" role="tablist" aria-label="Chọn đăng nhập hoặc đăng ký">
+        <span class="tab-pill" aria-hidden="true"></span>
+        <button class="tab" role="tab" id="tab-login" aria-selected="true" aria-controls="view-login" data-go="login">Đăng nhập</button>
+        <button class="tab" role="tab" id="tab-register" aria-selected="false" aria-controls="view-register" data-go="register">Tạo tài khoản</button>
+      </div>
+
+      <!-- ĐĂNG NHẬP -->
+      <section class="view" id="view-login" role="tabpanel" aria-labelledby="tab-login">
+        <h2>Chào mừng trở lại</h2>
+        <p class="sub">Đăng nhập để xem dashboard giám sát lưu lượng mạng Việt Nam.</p>
+
+        <div class="alert" id="login-alert" role="alert" hidden>
+          <span aria-hidden="true">⚠</span><span id="login-alert-text"></span>
+        </div>
+
+        <button class="btn primary" type="button" data-action="keycloak-login" id="sso-login">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 4v6c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10V6z"/><path d="M9 12l2 2 4-4"/></svg>
+          Tiếp tục với Keycloak (SSO)
+        </button>
+        <div class="sso-note">🔒 Mật khẩu chỉ được nhập tại máy chủ xác thực, không lưu ở dashboard</div>
+
+        <div class="divider">HOẶC DÙNG TÀI KHOẢN</div>
+
+        <form id="login-form" novalidate>
+          <div class="field">
+            <label for="l-user">Tên đăng nhập hoặc email</label>
+            <div class="input-wrap"><input class="input" id="l-user" data-field="username" autocomplete="username" placeholder="vd: demo" required></div>
+            <div class="err" id="l-user-err"></div>
+          </div>
+          <div class="field">
+            <label for="l-pass">Mật khẩu <button type="button" class="link" data-go="forgot">Quên mật khẩu?</button></label>
+            <div class="input-wrap">
+              <input class="input" id="l-pass" data-field="password" type="password" autocomplete="current-password" placeholder="••••••••" required>
+              <button type="button" class="icon-btn" data-toggle="l-pass" aria-label="Hiện mật khẩu">👁</button>
+            </div>
+            <div class="err" id="l-pass-err"></div>
+          </div>
+          <div class="row"><label class="check"><input type="checkbox" data-field="remember"> Ghi nhớ đăng nhập</label></div>
+          <button class="btn" type="submit" id="login-submit">Đăng nhập</button>
+        </form>
+
+        <p class="switch">Chưa có tài khoản? <button class="link" type="button" data-go="register">Đăng ký ngay</button></p>
+      </section>
+
+      <!-- ĐĂNG KÝ -->
+      <section class="view" id="view-register" role="tabpanel" aria-labelledby="tab-register" hidden>
+        <h2>Tạo tài khoản mới</h2>
+        <p class="sub">Chỉ mất một phút. Bạn sẽ có quyền xem dashboard ngay sau khi xác minh email.</p>
+
+        <form id="reg-form" novalidate>
+          <div class="field">
+            <label for="r-name">Họ và tên</label>
+            <div class="input-wrap"><input class="input" id="r-name" data-field="name" autocomplete="name" placeholder="Nguyễn Văn A" required></div>
+            <div class="err" id="r-name-err"></div>
+          </div>
+          <div class="field">
+            <label for="r-email">Email</label>
+            <div class="input-wrap"><input class="input" id="r-email" data-field="email" type="email" autocomplete="email" placeholder="ban@example.com" required></div>
+            <div class="err" id="r-email-err"></div>
+          </div>
+          <div class="field">
+            <label for="r-pass">Mật khẩu</label>
+            <div class="input-wrap">
+              <input class="input" id="r-pass" data-field="password" type="password" autocomplete="new-password" placeholder="Tối thiểu 8 ký tự" required aria-describedby="meter-label">
+              <button type="button" class="icon-btn" data-toggle="r-pass" aria-label="Hiện mật khẩu">👁</button>
+            </div>
+            <div class="meter" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+            <div class="meter-label"><span id="meter-label">Nhập mật khẩu để kiểm tra độ mạnh</span></div>
+            <div class="err" id="r-pass-err"></div>
+          </div>
+          <div class="field">
+            <label for="r-pass2">Nhập lại mật khẩu</label>
+            <div class="input-wrap"><input class="input" id="r-pass2" data-field="confirm" type="password" autocomplete="new-password" placeholder="Nhập lại mật khẩu" required></div>
+            <div class="err" id="r-pass2-err"></div>
+          </div>
+
+          <div class="role-note">
+            <span aria-hidden="true">👁</span>
+            <span>Tài khoản mới có vai trò <b>Viewer</b>: xem biểu đồ và dự báo. Quyền <b>Admin</b> (chạy tác vụ phân tích) do quản trị viên cấp.</span>
+          </div>
+
+          <label class="check" style="margin-bottom:18px"><input type="checkbox" id="r-agree" data-field="agree"> <span>Tôi đồng ý với điều khoản sử dụng và chính sách dữ liệu.</span></label>
+          <div class="err" id="r-agree-err" style="margin:-10px 0 14px"></div>
+
+          <button class="btn primary" type="submit" id="reg-submit" data-action="keycloak-register">Tạo tài khoản</button>
+        </form>
+
+        <p class="switch">Đã có tài khoản? <button class="link" type="button" data-go="login">Đăng nhập</button></p>
+      </section>
+
+      <!-- QUÊN MẬT KHẨU -->
+      <section class="view" id="view-forgot" role="tabpanel" hidden>
+        <h2>Đặt lại mật khẩu</h2>
+        <p class="sub">Nhập email đã đăng ký, chúng tôi sẽ gửi liên kết đặt lại mật khẩu.</p>
+        <form id="forgot-form" novalidate>
+          <div class="field">
+            <label for="f-email">Email</label>
+            <div class="input-wrap"><input class="input" id="f-email" type="email" autocomplete="email" placeholder="ban@example.com"></div>
+            <div class="err" id="f-email-err"></div>
+          </div>
+          <button class="btn primary" type="submit" id="forgot-submit">Gửi liên kết</button>
+        </form>
+        <p class="switch"><button class="link" type="button" data-go="login">← Quay lại đăng nhập</button></p>
+      </section>
+
+      <!-- THÀNH CÔNG -->
+      <section class="view ok-view" id="view-done" hidden>
+        <div class="ok-ico"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg></div>
+        <h2 id="done-title">Hoàn tất</h2>
+        <p class="sub" id="done-text"></p>
+        <button class="btn primary" type="button" data-go="login">Về trang đăng nhập</button>
+      </section>
+
+      <p class="legal">© 2026 RADAR / VN · Đồ án Khai phá dữ liệu · Nhóm 6</p>
+    </div>
+  </main>
+</div>
+
+<script>
+(function(){
+  const $ = (s, r=document) => r.querySelector(s);
+  const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
+  const views = ["login","register","forgot","done"];
+  const tabs = $("#tabs");
+
+  function show(name){
+    if(!views.includes(name)) name = "login";
+    views.forEach(v => { $("#view-"+v).hidden = v !== name; });
+    const tabName = name === "register" ? "register" : "login";
+    tabs.dataset.active = tabName;
+    tabs.style.display = (name === "forgot" || name === "done") ? "none" : "";
+    $("#tab-login").setAttribute("aria-selected", tabName === "login");
+    $("#tab-register").setAttribute("aria-selected", tabName === "register");
+    if (location.hash !== "#"+name) history.replaceState(null,"","#"+name);
+    const first = $("#view-"+name+" input"); if(first && name!=="done") first.focus({preventScroll:true});
+  }
+  $$("[data-go]").forEach(el => el.addEventListener("click", () => show(el.dataset.go)));
+  window.addEventListener("hashchange", () => show(location.hash.slice(1)));
+  show(location.hash.slice(1) || "login");
+
+  // Hiện / ẩn mật khẩu
+  $$("[data-toggle]").forEach(btn => btn.addEventListener("click", () => {
+    const input = document.getElementById(btn.dataset.toggle);
+    const hidden = input.type === "password";
+    input.type = hidden ? "text" : "password";
+    btn.textContent = hidden ? "🙈" : "👁";
+    btn.setAttribute("aria-label", hidden ? "Ẩn mật khẩu" : "Hiện mật khẩu");
+  }));
+
+  // Helpers kiểm tra
+  function setErr(id, msg){
+    const el = document.getElementById(id); el.textContent = msg || "";
+    const input = el.previousElementSibling && el.previousElementSibling.querySelector ? el.previousElementSibling.querySelector("input") : null;
+    if(input) input.setAttribute("aria-invalid", msg ? "true" : "false");
+    return !msg;
+  }
+  const emailOk = v => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v);
+  function busy(btn, on, label){
+    btn.disabled = on;
+    btn.dataset.label = btn.dataset.label || btn.innerHTML;
+    btn.innerHTML = on ? '<span class="spinner"></span> Đang xử lý…' : (label || btn.dataset.label);
+  }
+  const fakeRequest = () => new Promise(r => setTimeout(r, 900));
+
+  // SSO (mockup: chỉ giả lập)
+  $("#sso-login").addEventListener("click", async e => {
+    busy(e.currentTarget, true); await fakeRequest(); busy(e.currentTarget, false);
+    const a = $("#login-alert"); a.hidden = false;
+    $("#login-alert-text").textContent = "Mockup: tại đây gọi signIn(\"keycloak\") của NextAuth để chuyển sang Keycloak.";
+  });
+
+  // Đăng nhập (form)
+  $("#login-form").addEventListener("submit", async e => {
+    e.preventDefault();
+    const u = $("#l-user").value.trim(), p = $("#l-pass").value;
+    const ok1 = setErr("l-user-err", u ? "" : "Vui lòng nhập tên đăng nhập hoặc email");
+    const ok2 = setErr("l-pass-err", p ? "" : "Vui lòng nhập mật khẩu");
+    if(!(ok1 && ok2)) return;
+    const btn = $("#login-submit"); busy(btn, true); await fakeRequest(); busy(btn, false);
+    const a = $("#login-alert"); a.hidden = false;
+    $("#login-alert-text").textContent = "Tên đăng nhập hoặc mật khẩu không đúng. (Trạng thái lỗi mẫu của mockup)";
+  });
+
+  // Độ mạnh mật khẩu
+  function strength(p){
+    let s = 0;
+    if(p.length >= 8) s++;
+    if(/[a-z]/.test(p) && /[A-Z]/.test(p)) s++;
+    if(/\d/.test(p)) s++;
+    if(/[^A-Za-z0-9]/.test(p) || p.length >= 14) s++;
+    return p ? Math.max(1, s) : 0;
+  }
+  const levels = [["Nhập mật khẩu để kiểm tra độ mạnh","var(--border)"],["Yếu","#EF4444"],["Trung bình","#F59E0B"],["Khá","#22C55E"],["Mạnh","#10B981"]];
+  $("#r-pass").addEventListener("input", e => {
+    const s = strength(e.target.value);
+    $$(".meter i").forEach((bar,i) => bar.style.background = i < s ? levels[s][1] : "var(--border)");
+    $("#meter-label").textContent = levels[s][0];
+  });
+
+  // Đăng ký
+  $("#reg-form").addEventListener("submit", async e => {
+    e.preventDefault();
+    const name = $("#r-name").value.trim(), email = $("#r-email").value.trim();
+    const p = $("#r-pass").value, p2 = $("#r-pass2").value;
+    const checks = [
+      setErr("r-name-err", name.length >= 2 ? "" : "Vui lòng nhập họ và tên"),
+      setErr("r-email-err", emailOk(email) ? "" : "Email không hợp lệ"),
+      setErr("r-pass-err", p.length >= 8 ? "" : "Mật khẩu cần tối thiểu 8 ký tự"),
+      setErr("r-pass2-err", p2 && p2 === p ? "" : "Mật khẩu nhập lại không khớp"),
+    ];
+    const agree = $("#r-agree").checked; $("#r-agree-err").textContent = agree ? "" : "Bạn cần đồng ý điều khoản để tiếp tục";
+    if(!checks.every(Boolean) || !agree) return;
+    const btn = $("#reg-submit"); busy(btn, true); await fakeRequest(); busy(btn, false);
+    $("#done-title").textContent = "Kiểm tra hộp thư của bạn";
+    $("#done-text").textContent = "Chúng tôi đã gửi email xác minh tới " + email + ". Bấm vào liên kết trong email để kích hoạt tài khoản Viewer.";
+    show("done");
+  });
+
+  // Quên mật khẩu
+  $("#forgot-form").addEventListener("submit", async e => {
+    e.preventDefault();
+    const email = $("#f-email").value.trim();
+    if(!setErr("f-email-err", emailOk(email) ? "" : "Email không hợp lệ")) return;
+    const btn = $("#forgot-submit"); busy(btn, true); await fakeRequest(); busy(btn, false);
+    $("#done-title").textContent = "Đã gửi liên kết";
+    $("#done-text").textContent = "Nếu email tồn tại trong hệ thống, bạn sẽ nhận được hướng dẫn đặt lại mật khẩu trong ít phút.";
+    show("done");
+  });
+})();
+</script>
+</body>
+</html>
