@@ -43,7 +43,7 @@ def get_latest_silver_ts(
     conditions = [
         "metric = ANY(%s)",
         "value IS NOT NULL",
-        "NOT isinf(value)",
+        "value NOT IN ('NaN'::double precision, 'Infinity'::double precision, '-Infinity'::double precision)",
     ]
     params: list[Any] = [list(selected_metrics)]
 

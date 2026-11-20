@@ -30,7 +30,7 @@ def test_get_latest_silver_ts_empty():
 
 
 def test_get_latest_silver_ts_filters_invalid_and_source():
-    # Kiểm tra câu lệnh SQL của get_latest_silver_ts có lọc source='radar', NOT isinf, NOT NULL
+    # Kiểm tra lọc source='radar', số không hữu hạn và NULL.
     mock_conn = MagicMock()
     mock_cur = MagicMock()
     mock_conn.cursor.return_value.__enter__.return_value = mock_cur
@@ -43,7 +43,10 @@ def test_get_latest_silver_ts_filters_invalid_and_source():
 
     assert "COALESCE(source, 'radar') = %s" in executed_sql
     assert "value IS NOT NULL" in executed_sql
-    assert "NOT isinf(value)" in executed_sql
+    assert "value NOT IN" in executed_sql
+    assert "'NaN'::double precision" in executed_sql
+    assert "'Infinity'::double precision" in executed_sql
+    assert "'-Infinity'::double precision" in executed_sql
     assert "radar" in params
 
 
