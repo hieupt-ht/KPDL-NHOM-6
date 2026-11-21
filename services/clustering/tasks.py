@@ -1,8 +1,11 @@
 """Các tác vụ phân cụm trạng thái từng ngày.
 
-Luồng: Silver (metrics_hourly) -> đặc trưng ngày -> K-Means đã huấn luyện
-(models/kmeans.joblib) -> upsert gold.cluster_results. Ngày tính theo UTC, khớp
-với features.build_features dùng khi huấn luyện.
+Luồng: Silver (metrics_hourly) -> đặc trưng ngày (http_mean, l7_max, bot_mean) -> K-Means đã
+huấn luyện (models/kmeans.joblib) -> upsert gold.cluster_results. Ngày tính theo giờ VN và chỉ
+dùng ngày đủ 24 mốc giờ ở cả ba metric, khớp features.build_cluster_features khi huấn luyện.
+
+Tên cụm (README 5.2) đặt theo tâm cụm: Bất thường = cụm có tấn công/bot cao nhất; trong hai cụm
+còn lại, Cao điểm = traffic cao hơn, Bình thường = traffic thấp hơn.
 """
 
 from __future__ import annotations
@@ -17,16 +20,14 @@ import numpy as np
 import pandas as pd
 from psycopg.types.json import Jsonb
 
-from features import DEFAULT_METRIC, build_features, load_hourly
-from ml_config import CLUSTER_FALLBACK_NAME, CLUSTER_FEATURES, CLUSTER_NAMES, cluster_matrix
+from features import DEFAULT_METRIC, build_cluster_features, load_cluster_hourly
+from ml_config import CLUSTER_ATTACK, CLUSTER_FALLBACK_NAME, CLUSTER_NAMES, CLUSTER_TRAFFIC
 
 log = logging.getLogger("clustering")
 
 MODELS_DIR = Path(os.environ.get("MODELS_DIR", "/app/models"))
 MODEL_FILE = "kmeans.joblib"
 SERVICE = "clustering"
-# Tên cụm theo k (ml_config.json), xếp theo mean `value` tăng dần; k khác dùng tên dự phòng.
-NAMES = CLUSTER_NAMES
 
 
 def load_bundle(models_dir: Path | str | None = None) -> dict[str, Any]:
@@ -37,21 +38,31 @@ def load_bundle(models_dir: Path | str | None = None) -> dict[str, Any]:
     return joblib.load(path)
 
 
-def build_daily_features(conn, metric: str = DEFAULT_METRIC) -> pd.DataFrame:
-    """Đặc trưng phân cụm theo ngày (index = ngày UTC); bỏ ngày thiếu lag/trung bình trượt."""
-    daily = build_features(load_hourly(conn, metric), dropna=False)
-    if daily.empty:
-        return pd.DataFrame(columns=CLUSTER_FEATURES, index=daily.index)
-    return cluster_matrix(daily).dropna()
+def build_daily_features(conn) -> pd.DataFrame:
+    """Đặc trưng phân cụm theo ngày VN (index = ngày); chỉ giữ ngày đủ giờ ở mọi metric."""
+    return build_cluster_features(load_cluster_hourly(conn))
 
 
 def cluster_names(bundle: dict[str, Any]) -> dict[int, str]:
-    """Ánh xạ cluster_id -> tên, xếp theo mean `value` của tâm cụm (tăng dần)."""
-    pipe, feats = bundle["model"], list(bundle["features"])
-    centers = pipe[0].inverse_transform(pipe[-1].cluster_centers_)[:, feats.index("value")]
-    order = np.argsort(centers)  # order[r] = cluster_id có mức thấp thứ r
-    labels = NAMES.get(len(order)) or [CLUSTER_FALLBACK_NAME.format(n=r + 1) for r in range(len(order))]
-    return {int(cid): labels[r] for r, cid in enumerate(order)}
+    """Ánh xạ cluster_id -> tên theo tâm cụm (không gian đã chuẩn hóa).
+
+    k = 2: Bất thường (tấn công/bot cao nhất) và Bình thường. k = 3: thêm Cao điểm (traffic cao hơn
+    trong hai cụm còn lại). k khác: tên dự phòng "Cụm n" xếp theo traffic tăng dần.
+    """
+    feats = list(bundle["features"])
+    centers = np.asarray(bundle["model"][-1].cluster_centers_)  # đã chuẩn hóa vì StandardScaler đứng trước
+    traffic = centers[:, feats.index(CLUSTER_TRAFFIC)]
+    attack = centers[:, [feats.index(c) for c in CLUSTER_ATTACK]].max(axis=1)
+    k = len(centers)
+    if k in (2, 3):
+        anomaly = int(np.argmax(attack))
+        rest = sorted((c for c in range(k) if c != anomaly), key=lambda c: traffic[c])
+        names = {anomaly: CLUSTER_NAMES["anomaly"], rest[0]: CLUSTER_NAMES["normal"]}
+        if k == 3:
+            names[rest[1]] = CLUSTER_NAMES["peak"]
+        return names
+    order = np.argsort(traffic)
+    return {int(cid): CLUSTER_FALLBACK_NAME.format(n=r + 1) for r, cid in enumerate(order)}
 
 
 def assign_clusters(features: pd.DataFrame, bundle: dict[str, Any], mart_conn, metric: str = DEFAULT_METRIC) -> int:
@@ -103,7 +114,7 @@ def run_clustering(warehouse_conn, mart_conn, models_dir: Path | str | None = No
     run_id = _start_run(mart_conn)
     try:
         bundle = load_bundle(models_dir)
-        n = assign_clusters(build_daily_features(warehouse_conn, metric), bundle, mart_conn, metric)
+        n = assign_clusters(build_daily_features(warehouse_conn), bundle, mart_conn, metric)
         mart_conn.commit()
     except Exception as exc:
         mart_conn.rollback()

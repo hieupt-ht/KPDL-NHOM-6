@@ -120,6 +120,9 @@ services:
       WAREHOUSE_DSN: postgresql://logic_user:${LOGIC_DB_PASSWORD}@warehouse-db:5432/${WAREHOUSE_DB}
       MART_DSN: postgresql://logic_user:${LOGIC_DB_PASSWORD}@mart-db:5432/${MART_DB}
       PREDICTION_INTERVAL_SECONDS: ${PREDICTION_INTERVAL_SECONDS:-300}
+      MODELS_DIR: /app/models
+    volumes:
+      - ./models:/app/models:ro
     ports: ["8003:8003"]
     depends_on:
       warehouse-db: {condition: service_healthy}
