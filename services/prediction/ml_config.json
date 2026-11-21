@@ -32,6 +32,7 @@
     "test_ratio": 0.2,
     "min_days": 30,
     "seed": 42,
-    "rf_estimators": 300
+    "rf_estimators": 300,
+    "regressor_target": "delta"
   }
 }

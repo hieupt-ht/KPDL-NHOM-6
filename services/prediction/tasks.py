@@ -76,6 +76,9 @@ def build_target_row(hourly: pd.DataFrame, risk_hourly: pd.DataFrame, features: 
 def predict_continuous(row: pd.DataFrame, target_date: date, bundle: dict[str, Any], mart_conn) -> float:
     """Dự báo chỉ số lưu lượng của ngày đích và upsert gold.forecast_continuous."""
     value = float(bundle["model"].predict(row[list(bundle["features"])])[0])
+    base = bundle.get("base_feature")  # mô hình delta: cộng lại giá trị ngày gần nhất đã biết
+    if base:
+        value += float(row[base].iloc[0])
     mart_conn.execute(
         "INSERT INTO gold.forecast_continuous (target_date, predicted_value, model_name, created_at) "
         "VALUES (%s, %s, %s, now()) "

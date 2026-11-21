@@ -30,6 +30,8 @@ def _validate(cfg: dict[str, Any]) -> None:
         )
     if cfg["horizon_days"] < 1 or cfg["min_hours_per_day"] < 1:
         raise ValueError("horizon_days và min_hours_per_day phải >= 1")
+    if cfg["training"]["regressor_target"] not in ("delta", "level"):
+        raise ValueError("training.regressor_target chỉ nhận delta hoặc level")
     if not 0 < cfg["risk"]["percentile"] < 100:
         raise ValueError("risk.percentile phải trong (0, 100)")
     if not 0 < cfg["risk"]["proba_cutoff"] < 1:
@@ -81,6 +83,10 @@ TEST_RATIO: float = TRAINING["test_ratio"]
 MIN_DAYS: int = TRAINING["min_days"]
 SEED: int = TRAINING["seed"]
 RF_ESTIMATORS: int = TRAINING["rf_estimators"]
+# "delta": bộ hồi quy dự báo (value - lag nhỏ nhất) rồi cộng lại lag đó, để không bị kẹt trong khoảng giá trị
+# đã thấy lúc train khi mức trung bình trôi (Random Forest không ngoại suy). "level": dự báo thẳng value.
+REGRESSOR_TARGET: str = TRAINING["regressor_target"]
+BASE_FEATURE: str | None = f"lag_{min(LAGS)}" if REGRESSOR_TARGET == "delta" else None
 
 
 def name_clusters(centers, features: list[str]) -> dict[int, str]:

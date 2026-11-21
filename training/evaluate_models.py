@@ -118,6 +118,8 @@ def _save(fig, out_dir: Path, name: str) -> str:
 def eval_regressor(bundle: dict, test: pd.DataFrame, out_dir: Path) -> tuple[dict, list[str]]:
     model, feats = bundle["model"], bundle["features"]
     y, pred = test["value"].to_numpy(), model.predict(test[feats])
+    if bundle.get("base_feature"):  # mô hình delta: cộng lại giá trị ngày gần nhất đã biết
+        pred = pred + test[bundle["base_feature"]].to_numpy()
     base_lag = min(LAGS)
     base = test[f"lag_{base_lag}"].to_numpy()  # mốc so sánh: ngày đích = giá trị ngày đủ gần nhất đã biết
     res = {
