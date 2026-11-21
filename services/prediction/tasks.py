@@ -6,7 +6,8 @@ gold.forecast_continuous / gold.forecast_discrete -> nhật ký gold.service_run
 
 Quy ước (ml_config.json, Issue #13):
 - Hồi quy: trung bình ngày của metric đích (http_traffic). Phân loại: "Cao" nếu P(High) >= proba_cutoff,
-  High = trung bình ngày của metric rủi ro (l7_attack) > percentile của tập train (bundle["risk_threshold"]).
+  High = trung bình ngày của metric rủi ro (l7_attack) > percentile của 28 ngày đã biết trước đó
+  (risk.label_mode = rolling, cột risk_ref) hoặc của tập train (label_mode = train).
 - Ngày tính theo giờ VN, ngày chỉ hợp lệ khi đủ 24 mốc giờ (features.daily_agg).
 - Ngày dự báo (target_date) = ngày đủ dữ liệu mới nhất + horizon_days (mặc định 2), tức ngày mai
   khi hôm qua đã đủ dữ liệu. Mô hình được huấn luyện đúng horizon này nên không dùng dữ liệu chưa đủ ngày.
@@ -25,7 +26,7 @@ from typing import Any
 import joblib
 import pandas as pd
 
-from features import DEFAULT_METRIC, daily_agg, feature_frame, load_hourly, regressor_inputs
+from features import DEFAULT_METRIC, daily_agg, feature_frame, classifier_inputs, load_hourly, regressor_inputs
 from ml_config import HORIZON, LABEL_HIGH, LABEL_LOW, RISK_METRIC, RISK_PROBA_CUTOFF
 
 log = logging.getLogger("prediction")
@@ -93,7 +94,7 @@ def predict_continuous(row: pd.DataFrame, target_date: date, bundle: dict[str, A
 def predict_discrete(row: pd.DataFrame, target_date: date, bundle: dict[str, Any], mart_conn) -> tuple[str, float]:
     """Phân loại rủi ro của ngày đích (Cao/Thấp) và upsert gold.forecast_discrete."""
     model = bundle["model"]
-    proba = model.predict_proba(row[list(bundle["features"])])[0]
+    proba = model.predict_proba(classifier_inputs(row, bundle["features"]))[0]
     classes = list(model.classes_)
     p_high = float(proba[classes.index(1)]) if 1 in classes else 0.0  # classifier huấn luyện chỉ thấy 1 lớp
     label = LABEL_HIGH if p_high >= bundle.get("proba_cutoff", RISK_PROBA_CUTOFF) else LABEL_LOW

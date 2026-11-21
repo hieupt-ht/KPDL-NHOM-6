@@ -37,6 +37,10 @@ def _validate(cfg: dict[str, Any]) -> None:
         raise ValueError("training.rf_min_samples_leaf_grid phải là danh sách số nguyên >= 1")
     if not 0 < tr["val_ratio"] < 1:
         raise ValueError("training.val_ratio phải trong (0, 1)")
+    if cfg["risk"].get("label_mode", "train") not in ("train", "rolling"):
+        raise ValueError("risk.label_mode chỉ nhận train hoặc rolling")
+    if cfg["risk"].get("rolling_days", 28) < 7:
+        raise ValueError("risk.rolling_days phải >= 7")
     if not 0 < cfg["risk"]["percentile"] < 100:
         raise ValueError("risk.percentile phải trong (0, 100)")
     if not 0 < cfg["risk"]["proba_cutoff"] < 1:
@@ -71,7 +75,12 @@ LABEL_HIGH: str = CONFIG["risk"]["label_high"]
 LABEL_LOW: str = CONFIG["risk"]["label_low"]
 # Bộ phân loại dùng thêm lag và trung bình trượt của chính metric rủi ro.
 RISK_FEATURES: list[str] = ["risk_" + f for f in MODEL_FEATURES if f != "dow"]
-CLASSIFIER_FEATURES: list[str] = MODEL_FEATURES + RISK_FEATURES
+# "train": High = risk_value > percentile của cả tập train (ngưỡng cố định).
+# "rolling": High = risk_value > percentile của rolling_days ngày đã biết trước đó (risk_ref, chỉ dùng ngày
+# <= ngày đích - HORIZON): bắt "tăng đột biến so với gần đây", không lệch khi mức tấn công trôi.
+RISK_LABEL_MODE: str = CONFIG["risk"].get("label_mode", "train")
+RISK_ROLLING_DAYS: int = CONFIG["risk"].get("rolling_days", 28)
+CLASSIFIER_FEATURES: list[str] = MODEL_FEATURES + RISK_FEATURES + (["risk_ref"] if RISK_LABEL_MODE == "rolling" else [])
 
 _CL = CONFIG["cluster"]
 K_RANGE = range(_CL["k_range"][0], _CL["k_range"][1] + 1)

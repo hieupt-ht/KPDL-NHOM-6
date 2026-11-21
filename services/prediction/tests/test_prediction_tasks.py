@@ -245,10 +245,14 @@ def test_target_row_none_when_only_partial_day():
     assert pt.build_target_row(h, h, ALL_FEATURES) is None
 
 
-def test_target_row_needs_seven_complete_days():
-    # Ranh giới: 7 ngày đủ -> dự báo được (lag_7 và roll_mean_7 đều có); 6 ngày -> thiếu.
-    assert _row(_data(7)) is not None
-    assert _row(_data(6)) is None
+def test_target_row_needs_enough_complete_days():
+    # Ranh giới: 7 ngày đủ cho lag_7/roll_mean_7; nhãn rolling cần thêm risk_ref (>= rolling_days // 2 ngày).
+    from ml_config import RISK_LABEL_MODE, RISK_ROLLING_DAYS
+
+    need = max(7, RISK_ROLLING_DAYS // 2) if RISK_LABEL_MODE == "rolling" else 7
+    assert _row(_data(need)) is not None
+    assert _row(_data(need - 1)) is None
+    assert _row(_data(7), features=tm.FEATURES) is not None and _row(_data(6), features=tm.FEATURES) is None
 
 
 def test_target_row_feature_subset():
