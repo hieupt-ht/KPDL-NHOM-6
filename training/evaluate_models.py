@@ -49,7 +49,7 @@ from sklearn.metrics import (  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from train_models import MODELS_DIR, load_data, split  # noqa: E402
-from features import regressor_inputs  # noqa: E402
+from features import classifier_inputs, regressor_inputs  # noqa: E402
 from ml_config import (  # noqa: E402  (train_models đã thêm services/prediction vào sys.path)
     CLUSTER_FEATURES,
     CLUSTER_TRAFFIC,
@@ -160,8 +160,9 @@ def eval_regressor(bundle: dict, test: pd.DataFrame, out_dir: Path) -> tuple[dic
 # ---- Phân loại rủi ro --------------------------------------------------------
 def eval_classifier(bundle: dict, test: pd.DataFrame, out_dir: Path) -> tuple[dict, list[str]]:
     model, feats, thr = bundle["model"], bundle["features"], bundle["risk_threshold"]
-    y = risk_label(test["risk_value"], thr)
-    proba = model.predict_proba(test[feats])[:, list(model.classes_).index(1)] if 1 in model.classes_ else np.zeros(len(test))
+    # Nhãn rolling: ngưỡng là risk_ref của từng ngày (bundle mode rolling có cột risk_ref trong features).
+    y = risk_label(test["risk_value"], test["risk_ref"] if "risk_ref" in feats else thr)
+    proba = model.predict_proba(classifier_inputs(test, feats))[:, list(model.classes_).index(1)] if 1 in model.classes_ else np.zeros(len(test))
     # Nhãn dự đoán theo đúng quy tắc service prediction: Cao nếu P(High) >= cutoff.
     cutoff = bundle.get("proba_cutoff", RISK_PROBA_CUTOFF)
     pred = (proba >= cutoff).astype(int)
@@ -174,6 +175,7 @@ def eval_classifier(bundle: dict, test: pd.DataFrame, out_dir: Path) -> tuple[di
     res = {
         "risk_metric": bundle.get("risk_metric"),
         "risk_percentile": bundle.get("risk_percentile"),
+        "risk_label_mode": bundle.get("risk_label_mode", "train"),
         "risk_threshold": thr,
         "proba_cutoff": cutoff,
         "test_high_ratio": float(y.mean()),

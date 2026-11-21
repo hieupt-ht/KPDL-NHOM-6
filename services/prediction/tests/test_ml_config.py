@@ -18,8 +18,9 @@ def test_decided_values_from_issue_13():
     assert (ml_config.TIMEZONE, ml_config.MIN_HOURS_PER_DAY, ml_config.HORIZON) == ("Asia/Ho_Chi_Minh", 24, 2)
     assert ml_config.MODEL_FEATURES == ["lag_2", "lag_7", "roll_mean_3", "roll_mean_7", "dow"]
     assert ml_config.CLASSIFIER_FEATURES == ml_config.MODEL_FEATURES + [
-        "risk_lag_2", "risk_lag_7", "risk_roll_mean_3", "risk_roll_mean_7"
+        "risk_lag_2", "risk_lag_7", "risk_roll_mean_3", "risk_roll_mean_7", "risk_ref"
     ]
+    assert (ml_config.RISK_LABEL_MODE, ml_config.RISK_ROLLING_DAYS) == ("rolling", 28)
     assert (ml_config.RISK_PERCENTILE, ml_config.RISK_PROBA_CUTOFF) == (75, 0.5)
     assert (ml_config.LABEL_HIGH, ml_config.LABEL_LOW) == ("Cao", "Thấp")
     assert list(ml_config.K_RANGE) == [2, 3, 4, 5, 6] and ml_config.K_FORCED == 3
@@ -35,6 +36,8 @@ def test_decided_values_from_issue_13():
         {"training.regressor_target": "abs"},
         {"training.rf_min_samples_leaf_grid": []},
         {"training.val_ratio": 1},
+        {"risk.label_mode": "abs"},
+        {"risk.rolling_days": 3},
         {"risk.percentile": 100},
         {"risk.proba_cutoff": 0},
         {"cluster.roles": {"traffic": "nope", "attack": ["l7_max"]}},

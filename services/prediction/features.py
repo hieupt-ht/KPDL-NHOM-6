@@ -15,6 +15,9 @@ from ml_config import (  # noqa: F401  (cấu hình: ml_config.json)
     CLUSTER_SPECS,
     HORIZON,
     LAGS,
+    RISK_LABEL_MODE,
+    RISK_PERCENTILE,
+    RISK_ROLLING_DAYS,
     METRIC as DEFAULT_METRIC,
     MIN_HOURS_PER_DAY,
     TIMEZONE,
@@ -72,6 +75,7 @@ def feature_frame(daily: pd.Series, risk_daily: pd.Series | None = None, upto: p
         cols = ["value"] + [f"lag_{n}" for n in LAGS] + [f"roll_mean_{w}" for w in WINDOWS] + ["dow"]
         if risk_daily is not None:
             cols += ["risk_value"] + [f"risk_lag_{n}" for n in LAGS] + [f"risk_roll_mean_{w}" for w in WINDOWS]
+            cols += ["risk_ref"] if RISK_LABEL_MODE == "rolling" else []
         return pd.DataFrame(columns=cols, index=pd.DatetimeIndex([], tz=TIMEZONE, name="day"))
     if upto is not None:
         daily = daily.reindex(pd.date_range(daily.index[0], upto, freq="D"))
@@ -82,7 +86,31 @@ def feature_frame(daily: pd.Series, risk_daily: pd.Series | None = None, upto: p
     if risk_daily is not None:
         risk = risk_daily.reindex(out.index)
         out = pd.concat([out, risk.rename("risk_value"), _lagged(risk, "risk_")], axis=1)
+        if RISK_LABEL_MODE == "rolling":
+            out["risk_ref"] = risk_reference(risk)
     return out
+
+
+def risk_reference(risk_daily: pd.Series) -> pd.Series:
+    """Ngưỡng rủi ro động: percentile RISK_PERCENTILE của RISK_ROLLING_DAYS ngày, kết thúc ở ngày đích - HORIZON."""
+    past = risk_daily.shift(HORIZON)
+    return past.rolling(RISK_ROLLING_DAYS, min_periods=RISK_ROLLING_DAYS // 2).quantile(RISK_PERCENTILE / 100)
+
+
+def classifier_inputs(df: pd.DataFrame, features: list[str]) -> pd.DataFrame:
+    """Đầu vào bộ phân loại. Có `risk_ref` (nhãn rolling): đặc trưng risk_* trừ risk_ref và đặc trưng traffic
+    trừ lag nhỏ nhất (bỏ cột gốc), để mô hình thấy độ lệch so với gần đây thay vì mức tuyệt đối."""
+    X = df[list(features)]
+    if "risk_ref" not in X.columns:
+        return X
+    X = X.copy()
+    base = f"lag_{min(LAGS)}"
+    for c in X.columns:
+        if c.startswith("risk_") and c != "risk_ref":
+            X[c] = X[c] - X["risk_ref"]
+        elif c not in ("dow", "risk_ref", base):
+            X[c] = X[c] - X[base]
+    return X.drop(columns=["risk_ref", base])
 
 
 def build_features(hourly: pd.DataFrame, dropna: bool = True, risk_hourly: pd.DataFrame | None = None) -> pd.DataFrame:

@@ -9,6 +9,8 @@
     "percentile": 75,
     "proba_cutoff": 0.5,
     "tune_cutoff": true,
+    "label_mode": "rolling",
+    "rolling_days": 28,
     "label_high": "Cao",
     "label_low": "Thấp"
   },

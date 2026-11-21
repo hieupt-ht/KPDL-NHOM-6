@@ -39,6 +39,7 @@ from sklearn.preprocessing import StandardScaler
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "services" / "prediction"))
 from features import (  # noqa: E402
+    classifier_inputs,
     regressor_inputs,
     DEFAULT_METRIC,
     build_cluster_features,
@@ -61,6 +62,7 @@ from ml_config import (  # noqa: E402
     VAL_RATIO,
     RISK_METRIC,
     RISK_PERCENTILE,
+    RISK_LABEL_MODE,
     RISK_PROBA_CUTOFF,
     RISK_TUNE_CUTOFF,
     SEED,
@@ -230,7 +232,8 @@ def choose_cutoff(train: pd.DataFrame, y_train: pd.Series) -> tuple[float, dict[
     y_fit, y_val = y_train.iloc[:cut], y_train.iloc[cut:]
     if not RISK_TUNE_CUTOFF or y_fit.nunique() < 2 or y_val.sum() == 0:
         return RISK_PROBA_CUTOFF, {}
-    proba = _p_high(_classifier().fit(train[CLASSIFIER_FEATURES].iloc[:cut], y_fit), train[CLASSIFIER_FEATURES].iloc[cut:])
+    X = classifier_inputs(train, CLASSIFIER_FEATURES)
+    proba = _p_high(_classifier().fit(X.iloc[:cut], y_fit), X.iloc[cut:])
     scores = {c: float(f1_score(y_val, (proba >= c).astype(int), zero_division=0)) for c in CUTOFF_GRID}
     best = max(scores.values())
     # Hòa điểm: lấy cutoff gần ml_config nhất để ổn định.
@@ -238,19 +241,27 @@ def choose_cutoff(train: pd.DataFrame, y_train: pd.Series) -> tuple[float, dict[
 
 
 def train_classifier(train: pd.DataFrame, test: pd.DataFrame, percentile: float, risk_metric: str) -> tuple[dict, dict]:
-    """Nhãn High risk (1) = trung bình ngày của metric rủi ro > percentile của tập train.
+    """Nhãn High risk (1) theo ml_config risk.label_mode.
 
-    Ngưỡng chỉ tính trên tập train (chia theo thời gian), không nhìn tập test.
+    - "rolling": trung bình ngày của metric rủi ro > risk_ref (percentile của các ngày gần đây đã biết).
+    - "train": > percentile của tập train (chia theo thời gian, không nhìn tập test).
+    `risk_threshold` ghi lại ngưỡng train (mode train) hoặc trung vị risk_ref trên train (mode rolling, để tham khảo).
     """
-    threshold = float(np.percentile(train["risk_value"], percentile))
-    y_train = (train["risk_value"] > threshold).astype(int)
-    y_test = (test["risk_value"] > threshold).astype(int)
+    if RISK_LABEL_MODE == "rolling":
+        threshold = float(train["risk_ref"].median())
+        y_train = (train["risk_value"] > train["risk_ref"]).astype(int)
+        y_test = (test["risk_value"] > test["risk_ref"]).astype(int)
+    else:
+        threshold = float(np.percentile(train["risk_value"], percentile))
+        y_train = (train["risk_value"] > threshold).astype(int)
+        y_test = (test["risk_value"] > threshold).astype(int)
     cutoff, val_f1 = choose_cutoff(train, y_train)
-    model = _classifier().fit(train[CLASSIFIER_FEATURES], y_train)
-    pred = (_p_high(model, test[CLASSIFIER_FEATURES]) >= cutoff).astype(int)
+    model = _classifier().fit(classifier_inputs(train, CLASSIFIER_FEATURES), y_train)
+    pred = (_p_high(model, classifier_inputs(test, CLASSIFIER_FEATURES)) >= cutoff).astype(int)
     metrics = {
         "risk_metric": risk_metric,
         "risk_percentile": percentile,
+        "risk_label_mode": RISK_LABEL_MODE,
         "risk_threshold": threshold,
         "proba_cutoff": cutoff,
         "val_f1_by_cutoff": val_f1,
@@ -267,6 +278,7 @@ def train_classifier(train: pd.DataFrame, test: pd.DataFrame, percentile: float,
         "risk_metric": risk_metric,
         "risk_threshold": threshold,
         "risk_percentile": percentile,
+        "risk_label_mode": RISK_LABEL_MODE,
         "proba_cutoff": cutoff,
     }
     return bundle, metrics
@@ -333,7 +345,7 @@ def main() -> None:
         f"RF Regressor (min_samples_leaf={r['rf_regressor']['min_samples_leaf']}): MAE={r['rf_regressor']['mae']:.3f}, RMSE={r['rf_regressor']['rmse']:.3f} "
         f"(baseline lag_{r['rf_regressor']['baseline_naive_lag']} MAE={r['rf_regressor']['baseline_naive_mae']:.3f})\n"
         f"RF Classifier (cutoff={r['rf_classifier']['proba_cutoff']:.2f}): Accuracy={r['rf_classifier']['accuracy']:.3f}, F1={r['rf_classifier']['f1']:.3f} "
-        f"(rủi ro theo {r['risk_metric']}: ngưỡng p{r['rf_classifier']['risk_percentile']:g} = {r['rf_classifier']['risk_threshold']:.3f}, "
+        f"(rủi ro theo {r['risk_metric']}, nhãn {r['rf_classifier']['risk_label_mode']}: ngưỡng p{r['rf_classifier']['risk_percentile']:g} ~ {r['rf_classifier']['risk_threshold']:.3f}, "
         f"tỉ lệ High train/test = {r['rf_classifier']['train_high_ratio']:.2f}/{r['rf_classifier']['test_high_ratio']:.2f})\n"
         f"Đã lưu vào {a.out_dir}"
     )
