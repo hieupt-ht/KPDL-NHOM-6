@@ -30,6 +30,19 @@ def test_daily_max_and_empty():
     assert daily_agg(pd.DataFrame(columns=["ts", "value"])).empty
 
 
+def test_duplicate_hours_cannot_complete_a_missing_hour():
+    h = vn_hourly(1).iloc[:-1]
+    h = pd.concat([h, h.iloc[[0]]], ignore_index=True)
+    assert daily_agg(h).isna().all()
+
+
+@pytest.mark.parametrize("value", [float("inf"), float("-inf"), float("nan"), None])
+def test_non_finite_hour_cannot_complete_a_day(value):
+    h = vn_hourly(1)
+    h.loc[0, "value"] = value
+    assert daily_agg(h).isna().all()
+
+
 def test_features_lags_skip_horizon():
     df = build_features(vn_hourly(14), dropna=False)  # value = ngày trong tháng
     assert list(df.columns) == ["value", "lag_2", "lag_7", "roll_mean_3", "roll_mean_7", "dow"]

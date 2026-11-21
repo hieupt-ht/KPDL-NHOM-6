@@ -13,6 +13,12 @@ x-python-health: &python-health
   start_period: 5s
 
 services:
+  model-setup:
+    profiles: [ml-fixtures]
+    build: {context: ../../.., dockerfile: training/Dockerfile, target: trainer}
+    command: ["--demo", "--out-dir", "/app/models"]
+    volumes: ["ml-models:/app/models"]
+
   warehouse-db:
     image: postgres:16
     environment:
@@ -76,6 +82,7 @@ services:
 
   clustering:
     build: {context: ../../.., dockerfile: services/clustering/Dockerfile}
+    volumes: ["ml-models:/app/models:ro"]
     environment: *logic
     depends_on:
       warehouse-db: {condition: service_healthy}
@@ -86,6 +93,7 @@ services:
 
   prediction:
     build: {context: ../../.., dockerfile: services/prediction/Dockerfile}
+    volumes: ["ml-models:/app/models:ro"]
     environment: *logic
     depends_on:
       warehouse-db: {condition: service_healthy}
@@ -132,6 +140,9 @@ services:
       analysis: {condition: service_healthy}
       clustering: {condition: service_healthy}
       prediction: {condition: service_healthy}
+
+volumes:
+  ml-models:
 
 networks:
   default:

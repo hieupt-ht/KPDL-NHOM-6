@@ -103,26 +103,8 @@ def predict_discrete(row: pd.DataFrame, target_date: date, bundle: dict[str, Any
     return label, p_high
 
 
-def _start_run(mart_conn) -> int:
-    row = mart_conn.execute(
-        "INSERT INTO gold.service_runs (service, started_at, status) VALUES (%s, now(), 'running') RETURNING id",
-        (SERVICE,),
-    ).fetchone()
-    mart_conn.commit()
-    return row[0]
-
-
-def _finish_run(mart_conn, run_id: int, status: str, error: str | None) -> None:
-    mart_conn.execute(
-        "UPDATE gold.service_runs SET finished_at = now(), status = %s, error = %s WHERE id = %s",
-        (status, error, run_id),
-    )
-    mart_conn.commit()
-
-
 def run_prediction(warehouse_conn, mart_conn, models_dir: Path | str | None = None) -> int:
-    """Chạy một lượt dự báo, ghi service_runs. Trả về số dự báo đã ghi (0 nếu thiếu dữ liệu)."""
-    run_id = _start_run(mart_conn)
+    """Ghi hai dự báo trong một transaction; common.runner sở hữu nhật ký chạy."""
     try:
         reg = load_bundle(REGRESSOR_FILE, models_dir)
         clf = load_bundle(CLASSIFIER_FILE, models_dir)
@@ -139,17 +121,16 @@ def run_prediction(warehouse_conn, mart_conn, models_dir: Path | str | None = No
             n = 2
             log.info("Dự báo %s (metric=%s): %.3f, rủi ro %s=%s (P=%.2f)", target_date, metric, value, risk_metric, label, p_high)
         mart_conn.commit()
-    except Exception as exc:
+    except Exception:
         mart_conn.rollback()
-        _finish_run(mart_conn, run_id, "failed", str(exc)[:1000])
         raise
-    _finish_run(mart_conn, run_id, "success", None)
     return n
 
 
-def run_all() -> None:
+def run_all() -> str:
     """Điểm vào cho scheduler: mở hai kết nối và chạy cả hai dự báo."""
     from common.db import get_mart_conn, get_warehouse_conn
 
     with get_warehouse_conn() as wh, get_mart_conn() as mart:
-        run_prediction(wh, mart)
+        n = run_prediction(wh, mart)
+    return "success" if n else "skipped"

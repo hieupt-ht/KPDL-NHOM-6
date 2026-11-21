@@ -97,7 +97,8 @@ def test_target_is_last_full_vietnam_day_plus_horizon():
     assert list(row.columns) == ALL_FEATURES and len(row) == 1 and not row.isna().any(axis=None)
     h = d["http_traffic"]
     local = pd.to_datetime(h["ts"]).dt.tz_convert(TZ).dt.strftime("%Y-%m-%d")
-    day = lambda x: h[local == x]["value"].mean()
+    def day(x):
+        return h[local == x]["value"].mean()
     assert row["lag_2"].iloc[0] == pytest.approx(day("2026-03-31"))
     assert row["lag_7"].iloc[0] == pytest.approx(day("2026-03-26"))
     assert row["roll_mean_3"].iloc[0] == pytest.approx((day("2026-03-29") + day("2026-03-30") + day("2026-03-31")) / 3)
@@ -193,8 +194,7 @@ def test_run_prediction_success_and_idempotent(models):
     assert str(mart.cont[0][0]) == "2026-04-02" and mart.cont[0][0] == mart.cont[1][0]
     assert mart.cont[0][1] == pytest.approx(mart.cont[1][1])
     assert mart.disc[0][:2] == mart.disc[1][:2] and mart.disc[0][2] == pytest.approx(mart.disc[1][2])
-    assert [r[0] for r in mart.runs] == ["INSERT", "UPDATE"] * 2
-    assert all(r[1][0] == "success" for r in mart.runs if r[0] == "UPDATE")
+    assert not mart.runs  # common.runner ghi duy nhất một nhật ký cho mỗi lần chạy
 
 
 def test_next_day_data_adds_new_target_and_keeps_old_one(models):
@@ -207,12 +207,21 @@ def test_next_day_data_adds_new_target_and_keeps_old_one(models):
 def test_run_prediction_no_data_writes_nothing(models):
     mart = FakeMart()
     assert pt.run_prediction(FakeWarehouse({}), mart, models) == 0
-    assert not mart.cont and not mart.disc and mart.runs[-1][1][0] == "success"
+    assert not mart.cont and not mart.disc and not mart.runs
 
 
 def test_run_prediction_records_failure(tmp_path):
     mart = FakeMart()
     with pytest.raises(FileNotFoundError):
         pt.run_prediction(FakeWarehouse(_data(30)), mart, tmp_path)
-    status, error, _ = mart.runs[-1][1]
-    assert status == "failed" and "rf_regressor.joblib" in error and mart.rollbacks == 1
+    assert not mart.runs and mart.rollbacks == 1
+
+
+@pytest.mark.parametrize("count,status", [(0, "skipped"), (2, "success")])
+def test_runner_receives_actual_outcome(monkeypatch, count, status):
+    from contextlib import nullcontext
+
+    monkeypatch.setattr("common.db.get_warehouse_conn", lambda: nullcontext(object()))
+    monkeypatch.setattr("common.db.get_mart_conn", lambda: nullcontext(object()))
+    monkeypatch.setattr(pt, "run_prediction", lambda *a: count)
+    assert pt.run_all() == status

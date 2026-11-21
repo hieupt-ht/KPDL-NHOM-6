@@ -146,13 +146,21 @@ def test_run_clustering_success_and_idempotent(env):
     assert n1 == n2 > 0
     # Upsert lần 2 trùng ngày với lần 1 (ON CONFLICT lo phần ghi đè).
     assert [r[0] for r in mart.upserts[:n1]] == [r[0] for r in mart.upserts[n1:]]
-    assert [r[0] for r in mart.runs] == ["INSERT", "UPDATE"] * 2
-    assert all(r[1][0] == "success" for r in mart.runs if r[0] == "UPDATE")
+    assert not mart.runs  # common.runner ghi duy nhất một nhật ký cho mỗi lần chạy
 
 
 def test_run_clustering_records_failure(tmp_path):
     mart = FakeMart()
     with pytest.raises(FileNotFoundError):
         ct.run_clustering(FakeWarehouse(tm.make_demo_data(days=40)), mart, tmp_path)
-    status, error, _ = mart.runs[-1][1]
-    assert status == "failed" and "kmeans.joblib" in error and mart.rollbacks == 1
+    assert not mart.runs and mart.rollbacks == 1
+
+
+@pytest.mark.parametrize("count,status", [(0, "skipped"), (90, "success")])
+def test_runner_receives_actual_outcome(monkeypatch, count, status):
+    from contextlib import nullcontext
+
+    monkeypatch.setattr("common.db.get_warehouse_conn", lambda: nullcontext(object()))
+    monkeypatch.setattr("common.db.get_mart_conn", lambda: nullcontext(object()))
+    monkeypatch.setattr(ct, "run_clustering", lambda *a: count)
+    assert ct.run_all() == status

@@ -37,12 +37,9 @@ Phân cụm dùng đặc trưng riêng theo ngày VN (README gốc 5.2): `http_m
 ## 2. Huấn luyện
 
 ```bash
-pip install -r services/prediction/requirements.txt   # pandas, scikit-learn, joblib, psycopg
-export WAREHOUSE_DSN=postgresql://logic_user:<mật_khẩu>@localhost:5432/<WAREHOUSE_DB>
-
-python training/train_models.py                 # đọc Silver
-python training/train_models.py --demo          # dữ liệu giả, không cần DB
-python training/train_models.py --k 3 --risk-percentile 80 --metric http_traffic --risk-metric l7_attack
+docker compose --profile training run --rm trainer
+# Dữ liệu giả: chỉ dùng riêng khi kiểm thử, không nghiệm thu dữ liệu thật.
+docker compose --profile training run --rm trainer --demo --out-dir /app/models/validation
 ```
 
 | Tham số | Mặc định | Ý nghĩa |
@@ -52,7 +49,7 @@ python training/train_models.py --k 3 --risk-percentile 80 --metric http_traffic
 | `--demo` | tắt | dùng dữ liệu giả (180 ngày, đủ 3 metric) |
 | `--k` | 3 (config) | ép số cụm; `--k` bỏ trống trong code (`k=None`) thì chọn k ∈ [2, 6] có Silhouette cao nhất |
 | `--risk-percentile` | 75 | ngưỡng "High" = percentile của tập **train** (theo thời gian) |
-| `--min-days` | 30 | Silver ít hơn số ngày này thì **tự chuyển sang demo** (có log cảnh báo) |
+| `--min-days` | 30 | Silver ít hơn số ngày này thì dừng, không tự tạo mô hình demo |
 | `--out-dir` | `models/` | thư mục lưu kết quả |
 
 Chia train/test **theo thời gian** (80% đầu train, 20% cuối test), không xáo trộn. Seed cố định 42.
@@ -96,12 +93,14 @@ docker compose up -d --build clustering prediction
 curl http://localhost:8002/health        # {"status":"ok","service":"clustering"}
 curl http://localhost:8003/health
 
-# Chạy tay một lượt, không qua HTTP (local; đặt WAREHOUSE_DSN, MART_DSN, MODELS_DIR=$PWD/models trước)
-(cd services/clustering && PYTHONPATH=../../backend:../prediction python -c "from tasks import run_all; run_all()")
-(cd services/prediction && PYTHONPATH=../../backend python -c "from tasks import run_all; run_all()")
 ```
 
-> **`POST /run` hiện trả `501 Not implemented`** (stub của khung chung). Muốn chạy ngay: dùng lệnh chạy tay ở trên, hoặc `docker compose restart <service>` (scheduler chạy lại theo lịch). Các endpoint `GET /api/clusters`, `/api/forecast/*` trong `services/api/routers/ml.py` cũng còn là stub 501.
+Chạy qua trang Vận hành bằng tài khoản Admin hoặc Jobs API:
+
+- POST /api/jobs/clustering/run hoặc /api/jobs/prediction/run trả 202 và run_id.
+- Poll GET /api/jobs/runs/{run_id}; 202 chỉ là đã nhận yêu cầu.
+- common.runner sở hữu duy nhất một nhật ký/khóa chạy. Thiếu dữ liệu trả skipped, thiếu mô hình hoặc lỗi ghi dữ liệu trả failed; lỗi công khai được runner làm sạch.
+- API đọc Gold đã hoạt động; bảng trống trả 404. Forecast mặc định lấy ngày mai theo giờ Việt Nam, nên dữ liệu trễ có thể vẫn trả 404; dùng start/end để xem ngày đích đã ghi.
 
 ### Đầu vào / đầu ra
 
@@ -112,7 +111,7 @@ curl http://localhost:8003/health
 | `cluster_results` | `date` | `cluster_id`, `cluster_name`, `features` (JSONB: `http_mean`, `l7_max`, `bot_mean`, `metric` = `http_traffic`), `computed_at` | clustering |
 | `forecast_continuous` | `target_date` | `predicted_value`, `model_name`, `created_at` | prediction |
 | `forecast_discrete` | `target_date` | `label` (`Cao`/`Thấp`), `probability` (= P(Cao), kể cả khi nhãn là Thấp), `model_name`, `created_at` | prediction |
-| `service_runs` | `id` | `service`, `started_at`, `finished_at`, `status` (`running`/`success`/`failed`), `error` | cả hai |
+| `service_runs` | `id` | `service`, `started_at`, `finished_at`, `status` (`running`/`success`/`failed`/`skipped`), `error` | common.runner |
 
 Quy ước:
 
@@ -121,7 +120,7 @@ Quy ước:
 - **`cluster_name`** theo tâm cụm (README 5.2): `Bất thường` = cụm có `l7_max` hoặc `bot_mean` cao nhất (chuẩn hóa); trong hai cụm còn lại `Cao điểm` = `http_mean` cao hơn, `Bình thường` = thấp hơn. k ≠ 2, 3 dùng `Cụm 1..k` theo traffic tăng dần.
 - **`label`** = `Cao` nếu P(High) ≥ 0.5, ngược lại `Thấp`.
 - **`model_name`** = `<rf_regressor|rf_classifier>/<data_source>/<trained_at>`.
-- Thiếu mô hình hoặc mô hình khác `horizon_days` → lỗi (ghi `service_runs.status='failed'`). Thiếu dữ liệu → prediction ghi log cảnh báo và trả 0 dòng (vẫn `success`, xem mục 5).
+- Thiếu mô hình hoặc mô hình khác `horizon_days` → lỗi (ghi `service_runs.status='failed'`). Thiếu dữ liệu → không ghi dự báo mới, runner ghi `skipped`; giữ kết quả cũ.
 
 Payload mẫu cho Frontend:
 
@@ -136,14 +135,15 @@ Payload mẫu cho Frontend:
 ## 4. Kiểm thử
 
 ```bash
-pytest training/tests services/prediction/tests services/clustering/tests   # giữ đúng thứ tự (xung đột sys.path)
+bash training/tests/run.sh                 # Windows: ./training/tests/run.ps1
+bash services/api/tests/run.sh all         # Windows: ./services/api/tests/run.ps1 -Mode All
 ```
 
 ## 5. Lưu ý và việc còn mở
 
 - Sau khi đổi `ml_config.json` (đặc trưng, metric, horizon, cụm): **train lại**. Service từ chối mô hình khác `horizon_days`. Container clustering và prediction đều đọc cùng `ml_config.json` (copy lúc build), không còn bản sao `cluster_matrix`.
-- Mô hình lưu `.joblib` (README gốc mục 5.4 ghi `.pkl`). `models/` chưa nằm trong `.gitignore`: file nhẹ thì commit, nặng thì dùng LFS.
+- Mô hình `.joblib` và metrics sinh ra được gitignore; chỉ nạp artifact tin cậy. Compose mount models chỉ đọc cho hai service.
 - Percentile 75 và cutoff 0.5 là **cấu hình khởi đầu**; chỉnh bằng validation khi có dữ liệu thật.
-- Trước khi tích hợp vào develop (Định, Issue #13): để `common.runner` sở hữu `gold.service_runs` và khóa chạy (hiện `run_prediction`/`run_clustering` tự ghi), thiếu dữ liệu đầu vào thì không báo `success`, và chạy kiểm thử Docker qua Admin.
+- Bộ E2E dùng Silver tổng hợp trong database test và mô hình demo ở volume riêng; chứng minh luồng tích hợp, không thay thế nghiệm thu mô hình thật của Hoàng/Minh.
 - Service dùng đúng phiên bản `scikit-learn~=1.6.0`: train bằng phiên bản khác có thể không nạp được `.joblib`.
 - Kết quả train bằng dữ liệu `demo` không phản ánh Silver thật; train lại với `WAREHOUSE_DSN` trước khi báo cáo.

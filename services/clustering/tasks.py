@@ -92,42 +92,23 @@ def assign_clusters(features: pd.DataFrame, bundle: dict[str, Any], mart_conn, m
     return len(rows)
 
 
-def _start_run(mart_conn) -> int:
-    row = mart_conn.execute(
-        "INSERT INTO gold.service_runs (service, started_at, status) VALUES (%s, now(), 'running') RETURNING id",
-        (SERVICE,),
-    ).fetchone()
-    mart_conn.commit()
-    return row[0]
-
-
-def _finish_run(mart_conn, run_id: int, status: str, error: str | None) -> None:
-    mart_conn.execute(
-        "UPDATE gold.service_runs SET finished_at = now(), status = %s, error = %s WHERE id = %s",
-        (status, error, run_id),
-    )
-    mart_conn.commit()
-
-
 def run_clustering(warehouse_conn, mart_conn, models_dir: Path | str | None = None, metric: str = DEFAULT_METRIC) -> int:
-    """Chạy một lượt, ghi service_runs. Lỗi được ghi lại rồi ném tiếp."""
-    run_id = _start_run(mart_conn)
+    """Ghi kết quả; common.runner sở hữu nhật ký và trạng thái lỗi."""
     try:
         bundle = load_bundle(models_dir)
         n = assign_clusters(build_daily_features(warehouse_conn), bundle, mart_conn, metric)
         mart_conn.commit()
-    except Exception as exc:
+    except Exception:
         mart_conn.rollback()
-        _finish_run(mart_conn, run_id, "failed", str(exc)[:1000])
         raise
-    _finish_run(mart_conn, run_id, "success", None)
     log.info("Đã gán cụm cho %d ngày (metric=%s, nguồn mô hình: %s)", n, metric, bundle.get("data_source"))
     return n
 
 
-def run_all() -> None:
+def run_all() -> str:
     """Điểm vào cho scheduler: mở hai kết nối và chạy phân cụm."""
     from common.db import get_mart_conn, get_warehouse_conn
 
     with get_warehouse_conn() as wh, get_mart_conn() as mart:
-        run_clustering(wh, mart)
+        n = run_clustering(wh, mart)
+    return "success" if n else "skipped"

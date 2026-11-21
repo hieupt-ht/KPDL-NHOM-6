@@ -115,9 +115,9 @@ def load_data(metric: str, risk_metric: str, demo: bool, min_days: int) -> tuple
             cl = build_cluster_features(load_cluster_hourly(conn))
         if len(df) >= min_days and len(cl) >= min_days:
             return df, cl, "silver"
-        log.warning(
-            "Silver chỉ có %d ngày dự báo và %d ngày phân cụm dùng được (< %d): chuyển sang dữ liệu DEMO.",
-            len(df), len(cl), min_days,
+        raise SystemExit(
+            f"Silver chỉ có {len(df)} ngày dự báo và {len(cl)} ngày phân cụm dùng được (< {min_days}). "
+            "Cần bổ sung dữ liệu; chỉ dùng --demo khi chủ động kiểm thử dữ liệu giả."
         )
     data = make_demo_data()
     df = build_features(data.get(metric, data["http_traffic"]), risk_hourly=data.get(risk_metric, data["l7_attack"]))

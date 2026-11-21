@@ -6,6 +6,7 @@ import joblib
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import train_models as tm  # noqa: E402
 from train_models import CLASSIFIER_FEATURES, FEATURES, build_cluster_features, make_demo_data, train_models  # noqa: E402
 
 
@@ -67,3 +68,14 @@ def test_forced_k(tmp_path):
     km = joblib.load(tmp_path / "kmeans.joblib")
     assert km["model"][-1].n_clusters == 2 and km["features"] == ["http_mean", "l7_max", "bot_mean"]
     assert km["model"].predict(build_cluster_features(make_demo_data(days=60))).max() <= 1
+
+
+def test_insufficient_silver_never_silently_trains_demo(monkeypatch):
+    from contextlib import nullcontext
+
+    monkeypatch.setenv("WAREHOUSE_DSN", "test-only")
+    monkeypatch.setattr("psycopg.connect", lambda dsn: nullcontext(object()))
+    monkeypatch.setattr(tm, "load_hourly", lambda *a: tm.make_demo_data(days=5)["http_traffic"])
+    monkeypatch.setattr(tm, "load_cluster_hourly", lambda *a: tm.make_demo_data(days=5))
+    with pytest.raises(SystemExit, match="Silver"):
+        tm.load_data("http_traffic", "l7_attack", demo=False, min_days=30)

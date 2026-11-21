@@ -6,6 +6,7 @@ MIN_HOURS_PER_DAY mốc giờ; ngày thiếu hoặc chưa đủ (thường là n
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import psycopg
 
@@ -25,7 +26,8 @@ from ml_config import (  # noqa: F401  (cấu hình: ml_config.json)
 def load_hourly(conn: psycopg.Connection, metric: str = DEFAULT_METRIC) -> pd.DataFrame:
     """Đọc (ts, value) theo giờ của một metric từ silver.metrics_hourly."""
     rows = conn.execute(
-        "SELECT ts, value FROM silver.metrics_hourly WHERE metric = %s ORDER BY ts", (metric,)
+        "SELECT ts, value FROM silver.metrics_hourly "
+        "WHERE metric = %s AND COALESCE(source, 'radar') = 'radar' ORDER BY ts", (metric,)
     ).fetchall()
     return pd.DataFrame(rows, columns=["ts", "value"])
 
@@ -42,7 +44,12 @@ def daily_agg(hourly: pd.DataFrame, how: str = "mean") -> pd.Series:
     if hourly.empty:
         return _empty_daily()
     ts = pd.to_datetime(hourly["ts"], utc=True).dt.tz_convert(TIMEZONE)
-    agg = hourly["value"].astype(float).groupby(ts.dt.normalize()).agg([how, "count"])
+    # Một giờ trùng không được bù cho giờ thiếu; NaN/Infinity không phải quan sát hợp lệ.
+    values = pd.to_numeric(hourly["value"], errors="coerce")
+    clean = pd.DataFrame({"ts": ts, "value": values.where(np.isfinite(values))})
+    clean["hour"] = clean["ts"].dt.floor("h")
+    clean = clean.drop_duplicates("hour", keep="last")
+    agg = clean["value"].groupby(clean["hour"].dt.normalize()).agg([how, "count"])
     daily = agg[how].where(agg["count"] >= MIN_HOURS_PER_DAY).asfreq("D")
     daily.index.name = "day"
     return daily
