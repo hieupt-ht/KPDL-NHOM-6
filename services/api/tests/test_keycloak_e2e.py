@@ -84,6 +84,9 @@ def keycloak_stack():
         ) as browser:
             page = browser.get(
                 url + "/protocol/openid-connect/auth",
+                # The first login theme render is cold even after Keycloak health is ready.
+                # Bound that initial GET on slower Docker laptops; never retry credential POSTs.
+                timeout=60,
                 params={
                     "client_id": "dashboard",
                     "response_type": "code",
