@@ -25,7 +25,7 @@ from typing import Any
 import joblib
 import pandas as pd
 
-from features import DEFAULT_METRIC, daily_agg, feature_frame, load_hourly
+from features import DEFAULT_METRIC, daily_agg, feature_frame, load_hourly, regressor_inputs
 from ml_config import HORIZON, LABEL_HIGH, LABEL_LOW, RISK_METRIC, RISK_PROBA_CUTOFF
 
 log = logging.getLogger("prediction")
@@ -75,8 +75,9 @@ def build_target_row(hourly: pd.DataFrame, risk_hourly: pd.DataFrame, features: 
 
 def predict_continuous(row: pd.DataFrame, target_date: date, bundle: dict[str, Any], mart_conn) -> float:
     """Dự báo chỉ số lưu lượng của ngày đích và upsert gold.forecast_continuous."""
-    value = float(bundle["model"].predict(row[list(bundle["features"])])[0])
     base = bundle.get("base_feature")  # mô hình delta: cộng lại giá trị ngày gần nhất đã biết
+    X = regressor_inputs(row, bundle["features"], base if bundle.get("relative") else None)
+    value = float(bundle["model"].predict(X)[0])
     if base:
         value += float(row[base].iloc[0])
     mart_conn.execute(

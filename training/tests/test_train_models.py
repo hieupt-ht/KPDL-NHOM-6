@@ -47,7 +47,8 @@ def test_models_predict(report):
 def test_regressor_is_delta_vs_smallest_lag(report):
     out, r = report
     reg = joblib.load(out / "rf_regressor.joblib")
-    assert reg["base_feature"] == "lag_2" and r["rf_regressor"]["target"] == "delta"
+    assert reg["base_feature"] == "lag_2" and r["rf_regressor"]["target"] == "delta" and reg["relative"]
+    assert "lag_2" not in reg["model"].feature_names_in_
 
 
 def test_leaf_chosen_from_grid_on_train_tail(report):
