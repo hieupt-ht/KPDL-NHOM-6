@@ -51,11 +51,13 @@ def test_risk_label():
 
 
 def test_uses_ml_config(evaluated):
-    from ml_config import CLUSTER_NAMES, HORIZON, METRIC, RISK_METRIC, RISK_PROBA_CUTOFF
+    import joblib
+    from ml_config import CLUSTER_NAMES, HORIZON, METRIC, RISK_METRIC
 
     r = evaluated[1]
     assert (r["metric"], r["risk_metric"], r["horizon_days"]) == (METRIC, RISK_METRIC, HORIZON)
-    assert r["rf_classifier"]["proba_cutoff"] == RISK_PROBA_CUTOFF and r["rf_classifier"]["risk_metric"] == RISK_METRIC
+    cutoff = joblib.load(evaluated[0] / "rf_classifier.joblib")["proba_cutoff"]
+    assert r["rf_classifier"]["proba_cutoff"] == cutoff and r["rf_classifier"]["risk_metric"] == RISK_METRIC
     assert r["rf_regressor"]["baseline_lag"] == 2
     assert set(r["kmeans"]["cluster_sizes"]) <= set(CLUSTER_NAMES.values())
 

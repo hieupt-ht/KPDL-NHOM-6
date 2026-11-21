@@ -153,8 +153,12 @@ def test_label_follows_probability_cutoff(models):
 
     target, row = _row()
     for p, expected in ((0.9, pt.LABEL_HIGH), (0.5, pt.LABEL_HIGH), (0.1, pt.LABEL_LOW)):
-        label, prob = pt.predict_discrete(row, target, {**clf, "model": Stub(p)}, FakeMart())
+        label, prob = pt.predict_discrete(row, target, {**clf, "model": Stub(p), "proba_cutoff": 0.5}, FakeMart())
         assert label == expected and prob == p
+    # Cutoff đã chỉnh lúc train (lưu trong bundle) thắng giá trị mặc định của ml_config.
+    assert pt.predict_discrete(row, target, {**clf, "model": Stub(0.4), "proba_cutoff": 0.3}, FakeMart())[0] == pt.LABEL_HIGH
+    old = {k: v for k, v in clf.items() if k != "proba_cutoff"}
+    assert pt.predict_discrete(row, target, {**old, "model": Stub(0.4)}, FakeMart())[0] == pt.LABEL_LOW
 
 
 def test_classifier_with_single_class_gives_zero_probability(models):
@@ -300,7 +304,7 @@ def test_label_just_below_cutoff_is_low(models):
             return [[0.5001, 0.4999]]
 
     target, row = _row()
-    label, p = pt.predict_discrete(row, target, {**clf, "model": Stub()}, FakeMart())
+    label, p = pt.predict_discrete(row, target, {**clf, "model": Stub(), "proba_cutoff": 0.5}, FakeMart())
     assert label == pt.LABEL_LOW and p == pytest.approx(0.4999)
 
 

@@ -96,7 +96,7 @@ def predict_discrete(row: pd.DataFrame, target_date: date, bundle: dict[str, Any
     proba = model.predict_proba(row[list(bundle["features"])])[0]
     classes = list(model.classes_)
     p_high = float(proba[classes.index(1)]) if 1 in classes else 0.0  # classifier huấn luyện chỉ thấy 1 lớp
-    label = LABEL_HIGH if p_high >= RISK_PROBA_CUTOFF else LABEL_LOW
+    label = LABEL_HIGH if p_high >= bundle.get("proba_cutoff", RISK_PROBA_CUTOFF) else LABEL_LOW
     mart_conn.execute(
         "INSERT INTO gold.forecast_discrete (target_date, label, probability, model_name, created_at) "
         "VALUES (%s, %s, %s, %s, now()) "
