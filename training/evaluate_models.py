@@ -49,6 +49,7 @@ from sklearn.metrics import (  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from train_models import MODELS_DIR, load_data, split  # noqa: E402
+from features import regressor_inputs  # noqa: E402
 from ml_config import (  # noqa: E402  (train_models đã thêm services/prediction vào sys.path)
     CLUSTER_FEATURES,
     CLUSTER_TRAFFIC,
@@ -117,7 +118,8 @@ def _save(fig, out_dir: Path, name: str) -> str:
 # ---- Hồi quy ----------------------------------------------------------------
 def eval_regressor(bundle: dict, test: pd.DataFrame, out_dir: Path) -> tuple[dict, list[str]]:
     model, feats = bundle["model"], bundle["features"]
-    y, pred = test["value"].to_numpy(), model.predict(test[feats])
+    X = regressor_inputs(test, feats, bundle.get("base_feature") if bundle.get("relative") else None)
+    y, pred = test["value"].to_numpy(), model.predict(X)
     if bundle.get("base_feature"):  # mô hình delta: cộng lại giá trị ngày gần nhất đã biết
         pred = pred + test[bundle["base_feature"]].to_numpy()
     base_lag = min(LAGS)
@@ -148,7 +150,7 @@ def eval_regressor(bundle: dict, test: pd.DataFrame, out_dir: Path) -> tuple[dic
     axes[1].set(title="Residual theo giá trị dự đoán", xlabel="dự đoán", ylabel="residual")
     figs.append(_save(fig, out_dir, "regressor_residuals.png"))
 
-    imp = pd.Series(model.feature_importances_, index=feats).sort_values()
+    imp = pd.Series(model.feature_importances_, index=X.columns).sort_values()
     fig, ax = plt.subplots(figsize=(6, 3.5))
     imp.plot.barh(ax=ax, title="Độ quan trọng đặc trưng (RF Regressor)")
     figs.append(_save(fig, out_dir, "regressor_feature_importance.png"))

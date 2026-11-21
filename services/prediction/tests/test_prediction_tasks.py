@@ -265,6 +265,23 @@ def test_predict_continuous_delta_adds_base_feature():
     assert pt.predict_continuous(row, None, bundle, FakeMart()) == pytest.approx(5.0 + row["lag_2"].iloc[0])
 
 
+class _EchoModel:
+    def predict(self, X):
+        self.X = X
+        return [0.0] * len(X)
+
+
+def test_predict_continuous_relative_inputs_subtract_base():
+    _, row = _row(_data(30))
+    m = _EchoModel()
+    feats = ["lag_2", "lag_7", "roll_mean_3", "dow"]
+    bundle = {"model": m, "features": feats, "base_feature": "lag_2", "relative": True}
+    value = pt.predict_continuous(row, None, bundle, FakeMart())
+    assert list(m.X.columns) == ["lag_7", "roll_mean_3", "dow"]
+    assert m.X["lag_7"].iloc[0] == pytest.approx(row["lag_7"].iloc[0] - row["lag_2"].iloc[0])
+    assert m.X["dow"].iloc[0] == row["dow"].iloc[0] and value == pytest.approx(row["lag_2"].iloc[0])
+
+
 def test_predict_continuous_uses_bundle_feature_order(models):
     reg = pt.load_bundle(pt.REGRESSOR_FILE, models)
     target, row = _row(_data(60))

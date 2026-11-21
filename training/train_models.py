@@ -39,6 +39,7 @@ from sklearn.preprocessing import StandardScaler
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "services" / "prediction"))
 from features import (  # noqa: E402
+    regressor_inputs,
     DEFAULT_METRIC,
     build_cluster_features,
     build_features,
@@ -171,6 +172,10 @@ def _base(df: pd.DataFrame):
     return df[BASE_FEATURE] if BASE_FEATURE else 0.0
 
 
+def _X(df: pd.DataFrame) -> pd.DataFrame:
+    return regressor_inputs(df, FEATURES, BASE_FEATURE)
+
+
 def choose_leaf(train: pd.DataFrame) -> tuple[int, dict[int, float]]:
     """Chọn min_samples_leaf theo MAE trên đoạn cuối của train (chia theo thời gian, không đụng tập test)."""
     cut = int(len(train) * (1 - VAL_RATIO))
@@ -179,8 +184,8 @@ def choose_leaf(train: pd.DataFrame) -> tuple[int, dict[int, float]]:
         return RF_LEAF_GRID[0], {}
     scores = {}
     for leaf in RF_LEAF_GRID:
-        m = _regressor(leaf).fit(fit[FEATURES], fit["value"] - _base(fit))
-        scores[leaf] = float(mean_absolute_error(val["value"], m.predict(val[FEATURES]) + _base(val)))
+        m = _regressor(leaf).fit(_X(fit), fit["value"] - _base(fit))
+        scores[leaf] = float(mean_absolute_error(val["value"], m.predict(_X(val)) + _base(val)))
     return min(scores, key=scores.get), scores
 
 
@@ -188,8 +193,8 @@ def train_regressor(train: pd.DataFrame, test: pd.DataFrame) -> tuple[dict, dict
     leaf, val_mae = choose_leaf(train)
     model = _regressor(leaf)
     base_te = _base(test)
-    model.fit(train[FEATURES], train["value"] - _base(train))  # delta: học chênh lệch so với giá trị ngày gần nhất
-    pred = model.predict(test[FEATURES]) + base_te
+    model.fit(_X(train), train["value"] - _base(train))  # delta: học chênh lệch so với giá trị ngày gần nhất
+    pred = model.predict(_X(test)) + base_te
     metrics = {
         "mae": float(mean_absolute_error(test["value"], pred)),
         "rmse": float(np.sqrt(mean_squared_error(test["value"], pred))),
@@ -200,7 +205,7 @@ def train_regressor(train: pd.DataFrame, test: pd.DataFrame) -> tuple[dict, dict
         "min_samples_leaf": leaf,
         "val_mae_by_leaf": val_mae,
     }
-    return {"model": model, "features": FEATURES, "base_feature": BASE_FEATURE, "min_samples_leaf": leaf}, metrics
+    return {"model": model, "features": FEATURES, "base_feature": BASE_FEATURE, "relative": bool(BASE_FEATURE), "min_samples_leaf": leaf}, metrics
 
 
 def train_classifier(train: pd.DataFrame, test: pd.DataFrame, percentile: float, risk_metric: str) -> tuple[dict, dict]:

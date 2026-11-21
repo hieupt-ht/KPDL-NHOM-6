@@ -96,6 +96,19 @@ def build_features(hourly: pd.DataFrame, dropna: bool = True, risk_hourly: pd.Da
     return out.dropna() if dropna else out
 
 
+def regressor_inputs(df: pd.DataFrame, features: list[str], base: str | None = None) -> pd.DataFrame:
+    """Đầu vào bộ hồi quy. Có `base` (mô hình delta tương đối): mọi đặc trưng mức (trừ `dow`) trừ đi `base`
+    và bỏ cột `base`, để mô hình chỉ thấy hình dạng gần đây, không phụ thuộc mức tuyệt đối đang trôi."""
+    X = df[list(features)]
+    if not base:
+        return X
+    X = X.copy()
+    for c in X.columns:
+        if c not in (base, "dow"):
+            X[c] = X[c] - X[base]
+    return X.drop(columns=[base])
+
+
 def load_cluster_hourly(conn: psycopg.Connection) -> dict[str, pd.DataFrame]:
     """Chuỗi giờ của mọi metric dùng để phân cụm (ml_config cluster.features)."""
     return {m: load_hourly(conn, m) for m in CLUSTER_METRICS}
