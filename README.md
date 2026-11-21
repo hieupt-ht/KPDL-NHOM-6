@@ -285,15 +285,19 @@ Các service chỉ **nạp mô hình đã huấn luyện sẵn** từ `models/` 
 | Mục tiêu | Trung bình `http_traffic` của ngày mai | Mức rủi ro ngày mai: **Cao** / **Thấp** |
 | Định nghĩa nhãn | — | **Cao** nếu trung bình `l7_attack` ngày đó lớn hơn percentile 75 của dữ liệu huấn luyện |
 | Thuật toán | `RandomForestRegressor` | `RandomForestClassifier` (`class_weight="balanced"`) |
-| Đặc trưng | Lag 1, 2, 3 và 7 ngày của traffic; rolling mean 7 ngày; thứ trong tuần; lag 1 ngày của `l7_attack` và `bot_share` | Giống bên hồi quy |
+| Đặc trưng | Lag 2, 7 ngày của HTTP; rolling mean 3, 7 ngày kết thúc ở D−2; thứ trong tuần | Đặc trưng hồi quy và lag/rolling tương ứng của `l7_attack` |
 | Đánh giá | MAE, RMSE | Accuracy, F1, confusion matrix |
-| Chia dữ liệu | 30 ngày cuối làm tập test, chia theo thời gian (không xáo trộn) | Giống bên hồi quy |
+| Chia dữ liệu | 80% đầu train, 20% cuối test theo thời gian, không xáo trộn | Giống bên hồi quy |
 
 > **Chạy 5 phút/lần nhưng dự báo "ngày mai":** mỗi lần chạy, service lấy dữ liệu Silver mới nhất (có thể Cloudflare vừa điều chỉnh) để cập nhật đặc trưng. Kết quả chỉ đổi khi dữ liệu đầu vào đổi. Service không huấn luyện lại.
 
+**Đề xuất đang kiểm chứng ở Issue #29:** nhánh tích hợp dùng nhãn Cao khi L7 ngày đích vượt p75 của 28 ngày đã biết trước D−2 (khởi động khi có ít nhất 14 ngày hợp lệ), thay định nghĩa cố định trong bảng trên. Cấu hình có thể chọn `risk.label_mode=train` hoặc `rolling`; cần nhóm xác nhận trước triển khai. Cutoff P(Cao) được chọn trên validation và lưu theo mô hình, không mặc định luôn là 0.5.
+
+Ngày đặc trưng theo `Asia/Ho_Chi_Minh`, chỉ nhận ngày đủ 24 giờ hợp lệ. Ngày đích = ngày đầy đủ cuối + 2; nếu Silver trễ thì ngày đích cũng lùi, API mặc định ngày mai có thể trả 404. Không đổi nhãn ngày chỉ để làm đầy biểu đồ. Xem [quy ước ML](training/README.md).
+
 ### 5.4. Huấn luyện offline
 
-- `training/train_models.py` đọc Silver, huấn luyện K-Means, hồi quy và phân loại, rồi lưu `.pkl` vào `models/`.
+- `training/train_models.py` đọc Silver nguồn Radar, huấn luyện K-Means, hồi quy và phân loại, rồi lưu `.joblib` vào `models/`.
 - Kết quả đánh giá ghi vào `models/metrics.json`.
 - Script chạy thủ công và không nằm trong luồng demo.
 
@@ -301,7 +305,7 @@ Các service chỉ **nạp mô hình đã huấn luyện sẵn** từ `models/` 
 
 ## 6. API và xác thực SSO/OIDC
 
-> **Tiến độ Backend/API:** API đọc Gold đã có triển khai và kiểm thử riêng; xem [hợp đồng API](docs/api-contract.md) và [hướng dẫn chạy/kiểm thử](docs/backend-api-local.md). Đã bổ sung JWT/Keycloak, phân quyền Viewer/Admin, Jobs API và runner có nhật ký/chống chạy trùng; xem [hướng dẫn xác thực và job](docs/backend-auth-jobs.md). Tác vụ Analysis/ML hiện vẫn là stub và sẽ được ghi failed khi kích hoạt; Auth.js ở frontend cần tích hợp tiếp. Với schema Gold hiện tại, histogram/seasonal/correlation và status từ chối `start`/`end` bằng 422; timeseries/clusters hỗ trợ `limit`/`offset` và header phân trang. Các điểm dưới đây mô tả kiến trúc mục tiêu; hợp đồng chi tiết ghi rõ hành vi hiện tại và nullability.
+> **Tiến độ Backend/API:** API đọc Gold, JWT/Keycloak, Viewer/Admin, Jobs API và runner có nhật ký/chống chạy trùng đã triển khai; xem [hợp đồng API](docs/api-contract.md) và [xác thực/job](docs/backend-auth-jobs.md). Analysis đã nghiệm thu dữ liệu Radar; frontend live đã tích hợp Auth.js. Nhánh này tích hợp task ML với runner, nhưng chất lượng mô hình thật chưa đạt nghiệm thu; xem [kiểm chứng ML](docs/ml-integration-validation.md). Với schema Gold hiện tại, histogram/seasonal/correlation và status từ chối `start`/`end` bằng 422; timeseries/clusters hỗ trợ `limit`/`offset` và header phân trang.
 
 ### 6.1. Endpoint dữ liệu
 
@@ -545,6 +549,12 @@ docker compose up -d --build
 
 ```bash
 python training/train_models.py
+```
+
+Đánh giá ngay sau khi train (metric + biểu đồ vào `models/eval/`; cần `matplotlib`):
+
+```bash
+python training/evaluate_models.py          # thêm --demo nếu không có DB
 ```
 
 ---

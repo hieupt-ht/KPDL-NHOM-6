@@ -106,8 +106,19 @@ services:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
     networks: [cyber-net]
 
+  trainer:
+    profiles: [training]
+    build: {context: ., dockerfile: training/Dockerfile, target: trainer}
+    environment:
+      WAREHOUSE_DSN: postgresql://logic_user:${LOGIC_DB_PASSWORD}@warehouse-db:5432/${WAREHOUSE_DB}
+    volumes: ["./models:/app/models"]
+    depends_on:
+      warehouse-db: {condition: service_healthy}
+    networks: [cyber-net]
+
   clustering:
     build: {context: ., dockerfile: services/clustering/Dockerfile}
+    volumes: ["./models:/app/models:ro"]
     environment:
       <<: *python-env
       WAREHOUSE_DSN: postgresql://logic_user:${LOGIC_DB_PASSWORD}@warehouse-db:5432/${WAREHOUSE_DB}
@@ -125,6 +136,7 @@ services:
 
   prediction:
     build: {context: ., dockerfile: services/prediction/Dockerfile}
+    volumes: ["./models:/app/models:ro"]
     environment:
       <<: *python-env
       WAREHOUSE_DSN: postgresql://logic_user:${LOGIC_DB_PASSWORD}@warehouse-db:5432/${WAREHOUSE_DB}
