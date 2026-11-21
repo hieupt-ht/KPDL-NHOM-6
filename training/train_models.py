@@ -56,6 +56,8 @@ from ml_config import (  # noqa: E402
     MODEL_FEATURES as FEATURES,
     BASE_FEATURE,
     RF_ESTIMATORS,
+    RF_LEAF_GRID,
+    VAL_RATIO,
     RISK_METRIC,
     RISK_PERCENTILE,
     RISK_PROBA_CUTOFF,
@@ -161,11 +163,32 @@ def split(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     return df.iloc[:cut], df.iloc[cut:]
 
 
+def _regressor(leaf: int) -> RandomForestRegressor:
+    return RandomForestRegressor(n_estimators=RF_ESTIMATORS, min_samples_leaf=leaf, random_state=SEED, n_jobs=-1)
+
+
+def _base(df: pd.DataFrame):
+    return df[BASE_FEATURE] if BASE_FEATURE else 0.0
+
+
+def choose_leaf(train: pd.DataFrame) -> tuple[int, dict[int, float]]:
+    """Chọn min_samples_leaf theo MAE trên đoạn cuối của train (chia theo thời gian, không đụng tập test)."""
+    cut = int(len(train) * (1 - VAL_RATIO))
+    fit, val = train.iloc[:cut], train.iloc[cut:]
+    if len(fit) < 10 or val.empty:
+        return RF_LEAF_GRID[0], {}
+    scores = {}
+    for leaf in RF_LEAF_GRID:
+        m = _regressor(leaf).fit(fit[FEATURES], fit["value"] - _base(fit))
+        scores[leaf] = float(mean_absolute_error(val["value"], m.predict(val[FEATURES]) + _base(val)))
+    return min(scores, key=scores.get), scores
+
+
 def train_regressor(train: pd.DataFrame, test: pd.DataFrame) -> tuple[dict, dict]:
-    model = RandomForestRegressor(n_estimators=RF_ESTIMATORS, random_state=SEED, n_jobs=-1)
-    base_tr = train[BASE_FEATURE] if BASE_FEATURE else 0.0
-    base_te = test[BASE_FEATURE] if BASE_FEATURE else 0.0
-    model.fit(train[FEATURES], train["value"] - base_tr)  # delta: học chênh lệch so với giá trị ngày gần nhất
+    leaf, val_mae = choose_leaf(train)
+    model = _regressor(leaf)
+    base_te = _base(test)
+    model.fit(train[FEATURES], train["value"] - _base(train))  # delta: học chênh lệch so với giá trị ngày gần nhất
     pred = model.predict(test[FEATURES]) + base_te
     metrics = {
         "mae": float(mean_absolute_error(test["value"], pred)),
@@ -174,8 +197,10 @@ def train_regressor(train: pd.DataFrame, test: pd.DataFrame) -> tuple[dict, dict
         "baseline_naive_mae": float(mean_absolute_error(test["value"], test[f"lag_{min(LAGS)}"])),
         "baseline_naive_lag": min(LAGS),
         "target": "delta" if BASE_FEATURE else "level",
+        "min_samples_leaf": leaf,
+        "val_mae_by_leaf": val_mae,
     }
-    return {"model": model, "features": FEATURES, "base_feature": BASE_FEATURE}, metrics
+    return {"model": model, "features": FEATURES, "base_feature": BASE_FEATURE, "min_samples_leaf": leaf}, metrics
 
 
 def train_classifier(train: pd.DataFrame, test: pd.DataFrame, percentile: float, risk_metric: str) -> tuple[dict, dict]:
@@ -269,7 +294,7 @@ def main() -> None:
         f"Nguồn: {r['data_source']}{tag}, {r['n_days']} ngày\n"
         f"KMeans: k={r['kmeans']['k']} (tốt nhất theo Silhouette: {r['kmeans']['best_k_by_silhouette']}), "
         f"Silhouette={r['kmeans']['silhouette']:.3f}\n"
-        f"RF Regressor: MAE={r['rf_regressor']['mae']:.3f}, RMSE={r['rf_regressor']['rmse']:.3f} "
+        f"RF Regressor (min_samples_leaf={r['rf_regressor']['min_samples_leaf']}): MAE={r['rf_regressor']['mae']:.3f}, RMSE={r['rf_regressor']['rmse']:.3f} "
         f"(baseline lag_{r['rf_regressor']['baseline_naive_lag']} MAE={r['rf_regressor']['baseline_naive_mae']:.3f})\n"
         f"RF Classifier: Accuracy={r['rf_classifier']['accuracy']:.3f}, F1={r['rf_classifier']['f1']:.3f} "
         f"(rủi ro theo {r['risk_metric']}: ngưỡng p{r['rf_classifier']['risk_percentile']:g} = {r['rf_classifier']['risk_threshold']:.3f}, "
