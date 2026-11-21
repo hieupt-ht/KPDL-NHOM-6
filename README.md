@@ -549,6 +549,12 @@ docker compose up -d --build
 python training/train_models.py
 ```
 
+Đánh giá ngay sau khi train (metric + biểu đồ vào `models/eval/`; cần `matplotlib`):
+
+```bash
+python training/evaluate_models.py          # thêm --demo nếu không có DB
+```
+
 ---
 
 ## 12. Kịch bản demo

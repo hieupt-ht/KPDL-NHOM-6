@@ -39,6 +39,8 @@ from sklearn.preprocessing import StandardScaler
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "services" / "prediction"))
 from features import (  # noqa: E402
+    classifier_inputs,
+    regressor_inputs,
     DEFAULT_METRIC,
     build_cluster_features,
     build_features,
@@ -54,10 +56,15 @@ from ml_config import (  # noqa: E402
     LAGS,
     MIN_DAYS,
     MODEL_FEATURES as FEATURES,
+    BASE_FEATURE,
     RF_ESTIMATORS,
+    RF_LEAF_GRID,
+    VAL_RATIO,
     RISK_METRIC,
     RISK_PERCENTILE,
+    RISK_LABEL_MODE,
     RISK_PROBA_CUTOFF,
+    RISK_TUNE_CUTOFF,
     SEED,
     TEST_RATIO,
     TIMEZONE,
@@ -160,36 +167,104 @@ def split(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     return df.iloc[:cut], df.iloc[cut:]
 
 
+def _regressor(leaf: int) -> RandomForestRegressor:
+    return RandomForestRegressor(n_estimators=RF_ESTIMATORS, min_samples_leaf=leaf, random_state=SEED, n_jobs=-1)
+
+
+def _base(df: pd.DataFrame):
+    return df[BASE_FEATURE] if BASE_FEATURE else 0.0
+
+
+def _X(df: pd.DataFrame) -> pd.DataFrame:
+    return regressor_inputs(df, FEATURES, BASE_FEATURE)
+
+
+def choose_leaf(train: pd.DataFrame) -> tuple[int, dict[int, float]]:
+    """Chọn min_samples_leaf theo MAE trên đoạn cuối của train (chia theo thời gian, không đụng tập test)."""
+    cut = int(len(train) * (1 - VAL_RATIO))
+    fit, val = train.iloc[:cut], train.iloc[cut:]
+    if len(fit) < 10 or val.empty:
+        return RF_LEAF_GRID[0], {}
+    scores = {}
+    for leaf in RF_LEAF_GRID:
+        m = _regressor(leaf).fit(_X(fit), fit["value"] - _base(fit))
+        scores[leaf] = float(mean_absolute_error(val["value"], m.predict(_X(val)) + _base(val)))
+    return min(scores, key=scores.get), scores
+
+
 def train_regressor(train: pd.DataFrame, test: pd.DataFrame) -> tuple[dict, dict]:
-    model = RandomForestRegressor(n_estimators=RF_ESTIMATORS, random_state=SEED, n_jobs=-1)
-    model.fit(train[FEATURES], train["value"])
-    pred = model.predict(test[FEATURES])
+    leaf, val_mae = choose_leaf(train)
+    model = _regressor(leaf)
+    base_te = _base(test)
+    model.fit(_X(train), train["value"] - _base(train))  # delta: học chênh lệch so với giá trị ngày gần nhất
+    pred = model.predict(_X(test)) + base_te
     metrics = {
         "mae": float(mean_absolute_error(test["value"], pred)),
         "rmse": float(np.sqrt(mean_squared_error(test["value"], pred))),
         # Mốc so sánh: đoán "giá trị ngày đích = giá trị ngày gần nhất đã biết" (lag nhỏ nhất).
         "baseline_naive_mae": float(mean_absolute_error(test["value"], test[f"lag_{min(LAGS)}"])),
         "baseline_naive_lag": min(LAGS),
+        "target": "delta" if BASE_FEATURE else "level",
+        "min_samples_leaf": leaf,
+        "val_mae_by_leaf": val_mae,
     }
-    return {"model": model, "features": FEATURES}, metrics
+    return {"model": model, "features": FEATURES, "base_feature": BASE_FEATURE, "relative": bool(BASE_FEATURE), "min_samples_leaf": leaf}, metrics
+
+
+CUTOFF_GRID = [round(c, 2) for c in np.arange(0.1, 0.91, 0.05)]
+
+
+def _classifier() -> RandomForestClassifier:
+    return RandomForestClassifier(n_estimators=RF_ESTIMATORS, class_weight="balanced", random_state=SEED, n_jobs=-1)
+
+
+def _p_high(model, X) -> np.ndarray:
+    classes = list(model.classes_)
+    return model.predict_proba(X)[:, classes.index(1)] if 1 in classes else np.zeros(len(X))
+
+
+def choose_cutoff(train: pd.DataFrame, y_train: pd.Series) -> tuple[float, dict[float, float]]:
+    """Chọn cutoff P(High) theo F1 trên đoạn cuối của train (không đụng tập test).
+
+    Không chỉnh (dùng ml_config) nếu tắt tune_cutoff, hoặc đoạn fit/val thiếu một trong hai lớp.
+    """
+    cut = int(len(train) * (1 - VAL_RATIO))
+    y_fit, y_val = y_train.iloc[:cut], y_train.iloc[cut:]
+    if not RISK_TUNE_CUTOFF or y_fit.nunique() < 2 or y_val.sum() == 0:
+        return RISK_PROBA_CUTOFF, {}
+    X = classifier_inputs(train, CLASSIFIER_FEATURES)
+    proba = _p_high(_classifier().fit(X.iloc[:cut], y_fit), X.iloc[cut:])
+    scores = {c: float(f1_score(y_val, (proba >= c).astype(int), zero_division=0)) for c in CUTOFF_GRID}
+    best = max(scores.values())
+    # Hòa điểm: lấy cutoff gần ml_config nhất để ổn định.
+    return min((c for c in scores if scores[c] == best), key=lambda c: abs(c - RISK_PROBA_CUTOFF)), scores
 
 
 def train_classifier(train: pd.DataFrame, test: pd.DataFrame, percentile: float, risk_metric: str) -> tuple[dict, dict]:
-    """Nhãn High risk (1) = trung bình ngày của metric rủi ro > percentile của tập train.
+    """Nhãn High risk (1) theo ml_config risk.label_mode.
 
-    Ngưỡng chỉ tính trên tập train (chia theo thời gian), không nhìn tập test.
+    - "rolling": trung bình ngày của metric rủi ro > risk_ref (percentile của các ngày gần đây đã biết).
+    - "train": > percentile của tập train (chia theo thời gian, không nhìn tập test).
+    `risk_threshold` ghi lại ngưỡng train (mode train) hoặc trung vị risk_ref trên train (mode rolling, để tham khảo).
     """
-    threshold = float(np.percentile(train["risk_value"], percentile))
-    y_train = (train["risk_value"] > threshold).astype(int)
-    y_test = (test["risk_value"] > threshold).astype(int)
-    model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, class_weight="balanced", random_state=SEED, n_jobs=-1)
-    model.fit(train[CLASSIFIER_FEATURES], y_train)
-    pred = model.predict(test[CLASSIFIER_FEATURES])
+    if RISK_LABEL_MODE == "rolling":
+        threshold = float(train["risk_ref"].median())
+        y_train = (train["risk_value"] > train["risk_ref"]).astype(int)
+        y_test = (test["risk_value"] > test["risk_ref"]).astype(int)
+    else:
+        threshold = float(np.percentile(train["risk_value"], percentile))
+        y_train = (train["risk_value"] > threshold).astype(int)
+        y_test = (test["risk_value"] > threshold).astype(int)
+    cutoff, val_f1 = choose_cutoff(train, y_train)
+    model = _classifier().fit(classifier_inputs(train, CLASSIFIER_FEATURES), y_train)
+    pred = (_p_high(model, classifier_inputs(test, CLASSIFIER_FEATURES)) >= cutoff).astype(int)
     metrics = {
         "risk_metric": risk_metric,
         "risk_percentile": percentile,
+        "risk_label_mode": RISK_LABEL_MODE,
         "risk_threshold": threshold,
-        "proba_cutoff": RISK_PROBA_CUTOFF,
+        "proba_cutoff": cutoff,
+        "val_f1_by_cutoff": val_f1,
         "accuracy": float(accuracy_score(y_test, pred)),
         "f1": float(f1_score(y_test, pred, zero_division=0)),
         "train_high_ratio": float(y_train.mean()),
@@ -203,6 +278,8 @@ def train_classifier(train: pd.DataFrame, test: pd.DataFrame, percentile: float,
         "risk_metric": risk_metric,
         "risk_threshold": threshold,
         "risk_percentile": percentile,
+        "risk_label_mode": RISK_LABEL_MODE,
+        "proba_cutoff": cutoff,
     }
     return bundle, metrics
 
@@ -265,10 +342,10 @@ def main() -> None:
         f"Nguồn: {r['data_source']}{tag}, {r['n_days']} ngày\n"
         f"KMeans: k={r['kmeans']['k']} (tốt nhất theo Silhouette: {r['kmeans']['best_k_by_silhouette']}), "
         f"Silhouette={r['kmeans']['silhouette']:.3f}\n"
-        f"RF Regressor: MAE={r['rf_regressor']['mae']:.3f}, RMSE={r['rf_regressor']['rmse']:.3f} "
+        f"RF Regressor (min_samples_leaf={r['rf_regressor']['min_samples_leaf']}): MAE={r['rf_regressor']['mae']:.3f}, RMSE={r['rf_regressor']['rmse']:.3f} "
         f"(baseline lag_{r['rf_regressor']['baseline_naive_lag']} MAE={r['rf_regressor']['baseline_naive_mae']:.3f})\n"
-        f"RF Classifier: Accuracy={r['rf_classifier']['accuracy']:.3f}, F1={r['rf_classifier']['f1']:.3f} "
-        f"(rủi ro theo {r['risk_metric']}: ngưỡng p{r['rf_classifier']['risk_percentile']:g} = {r['rf_classifier']['risk_threshold']:.3f}, "
+        f"RF Classifier (cutoff={r['rf_classifier']['proba_cutoff']:.2f}): Accuracy={r['rf_classifier']['accuracy']:.3f}, F1={r['rf_classifier']['f1']:.3f} "
+        f"(rủi ro theo {r['risk_metric']}, nhãn {r['rf_classifier']['risk_label_mode']}: ngưỡng p{r['rf_classifier']['risk_percentile']:g} ~ {r['rf_classifier']['risk_threshold']:.3f}, "
         f"tỉ lệ High train/test = {r['rf_classifier']['train_high_ratio']:.2f}/{r['rf_classifier']['test_high_ratio']:.2f})\n"
         f"Đã lưu vào {a.out_dir}"
     )

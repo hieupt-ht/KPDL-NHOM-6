@@ -7,6 +7,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import train_models as tm  # noqa: E402
+import ml_config as tm_config  # noqa: E402
 from train_models import CLASSIFIER_FEATURES, FEATURES, build_cluster_features, make_demo_data, train_models  # noqa: E402
 
 
@@ -44,6 +45,33 @@ def test_models_predict(report):
     assert r["rf_regressor"]["baseline_naive_lag"] == 2
 
 
+def test_regressor_is_delta_vs_smallest_lag(report):
+    out, r = report
+    reg = joblib.load(out / "rf_regressor.joblib")
+    assert reg["base_feature"] == "lag_2" and r["rf_regressor"]["target"] == "delta" and reg["relative"]
+    assert "lag_2" not in reg["model"].feature_names_in_
+
+
+def test_leaf_chosen_from_grid_on_train_tail(report):
+    out, r = report
+    reg = joblib.load(out / "rf_regressor.joblib")
+    m = r["rf_regressor"]
+    assert m["min_samples_leaf"] == reg["min_samples_leaf"] and m["min_samples_leaf"] in tm_config.RF_LEAF_GRID
+    assert set(m["val_mae_by_leaf"]) <= set(tm_config.RF_LEAF_GRID)
+    assert m["min_samples_leaf"] == min(m["val_mae_by_leaf"], key=m["val_mae_by_leaf"].get)
+
+
+def test_cutoff_tuned_on_train_tail_and_saved(report):
+    out, r = report
+    m = r["rf_classifier"]
+    assert joblib.load(out / "rf_classifier.joblib")["proba_cutoff"] == m["proba_cutoff"]
+    if m["val_f1_by_cutoff"]:
+        best = max(m["val_f1_by_cutoff"].values())
+        assert m["val_f1_by_cutoff"][m["proba_cutoff"]] == best
+    else:
+        assert m["proba_cutoff"] == tm_config.RISK_PROBA_CUTOFF
+
+
 def test_metadata_records_metric_horizon_and_timezone(report):
     out, r = report
     for name in ("kmeans", "rf_regressor", "rf_classifier"):
@@ -55,7 +83,7 @@ def test_metadata_records_metric_horizon_and_timezone(report):
 
 def test_risk_threshold_and_class_ratio_recorded_from_train_only(report):
     clf = report[1]["rf_classifier"]
-    assert clf["risk_metric"] == "l7_attack" and clf["risk_percentile"] == 75 and clf["proba_cutoff"] == 0.5
+    assert clf["risk_metric"] == "l7_attack" and clf["risk_percentile"] == 75
     assert 0.0 < clf["train_high_ratio"] < 0.5 and 0.0 <= clf["test_high_ratio"] <= 1.0
     assert clf["n_train_days"] + clf["n_test_days"] == report[1]["n_days"]
     # Ngưỡng nằm trong thang l7_attack (~10), không phải thang http_traffic (~100).

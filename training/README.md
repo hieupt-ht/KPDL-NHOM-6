@@ -31,7 +31,7 @@ Bộ hồi quy (metric `http_traffic`):
 | `roll_mean_3`, `roll_mean_7` | trung bình trượt 3 và 7 ngày kết thúc ở D−2 |
 | `dow` | thứ của ngày đích (0 = thứ Hai) |
 
-Bộ phân loại dùng thêm `risk_lag_2`, `risk_lag_7`, `risk_roll_mean_3`, `risk_roll_mean_7` tính từ metric rủi ro `l7_attack` (và `risk_value` làm nhãn gốc). Lag của ngày thiếu giữ NaN để đúng lịch; dòng thiếu đặc trưng bị bỏ. Cần khoảng 10 ngày liên tục gần nhất mới dự báo được.
+Bộ phân loại dùng thêm `risk_lag_2`, `risk_lag_7`, `risk_roll_mean_3`, `risk_roll_mean_7`, `risk_ref` tính từ metric rủi ro `l7_attack` (và `risk_value` làm nhãn gốc). Lag của ngày thiếu giữ NaN để đúng lịch; dòng thiếu đặc trưng bị bỏ. Cần ít nhất 14 ngày đủ dữ liệu (nửa cửa sổ 28 ngày của `risk_ref`) mới dự báo được.
 
 Phân cụm dùng đặc trưng riêng theo ngày VN (README gốc 5.2): `http_mean` (trung bình `http_traffic`), `l7_max` (max `l7_attack`), `bot_mean` (trung bình `bot_share`, đơn vị %).
 
@@ -60,8 +60,8 @@ Chia train/test **theo thời gian** (80% đầu train, 20% cuối test), không
 | File | Mô hình | Đầu vào | Đầu ra |
 | :--- | :--- | :--- | :--- |
 | `kmeans.joblib` | `StandardScaler` + `KMeans` (k = 3) | `http_mean`, `l7_max`, `bot_mean` | `cluster_id` |
-| `rf_regressor.joblib` | `RandomForestRegressor` (300 cây) | `lag_2, lag_7, roll_mean_3, roll_mean_7, dow` | trung bình `http_traffic` của ngày đích |
-| `rf_classifier.joblib` | `RandomForestClassifier` (300 cây, `class_weight=balanced`) | đặc trưng hồi quy + 4 đặc trưng `risk_*` | P(High); High = trung bình ngày `l7_attack` > percentile của train |
+| `rf_regressor.joblib` | `RandomForestRegressor` (300 cây, `min_samples_leaf` chọn trong `training.rf_min_samples_leaf_grid` theo MAE trên `val_ratio` cuối tập train) | `lag_2, lag_7, roll_mean_3, roll_mean_7, dow` | **chênh lệch** `value − lag_2` (đầu vào tương đối: `lag_7`, `roll_mean_*` trừ `lag_2`, bỏ `lag_2`, giữ `dow`; cộng lại `lag_2` khi dự báo; `training.regressor_target`: `delta`/`level`) → trung bình `http_traffic` của ngày đích |
+| `rf_classifier.joblib` | `RandomForestClassifier` (300 cây, `class_weight=balanced`) | đặc trưng hồi quy + 4 đặc trưng `risk_*` | P(High); High = trung bình ngày `l7_attack` > `risk_ref` = p75 của 28 ngày đã biết trước đó (≤ ngày đích − 2; `risk.label_mode: rolling`, `rolling_days`), tức tăng đột biến so với gần đây; `label_mode: train` dùng lại p75 cố định của tập train. Đầu vào tương đối: `risk_*` trừ `risk_ref`, traffic trừ `lag_2`. Cutoff P(High) chọn theo F1 trên `val_ratio` cuối tập train (`risk.tune_cutoff`), lưu `proba_cutoff` trong bundle; service dùng cutoff này |
 
 Mỗi `.joblib` là dict `{"model", "features", ...metadata}`: `features` là **thứ tự cột** service phải dùng; metadata gồm `data_source` (`silver`/`demo`), `metric`, `risk_metric`, `horizon_days`, `timezone`, `trained_at`, `n_days`, `train_range`, `test_range`. Classifier có thêm `risk_threshold`, `risk_percentile`. Service từ chối nạp mô hình có `horizon_days` khác cấu hình (phải train lại).
 

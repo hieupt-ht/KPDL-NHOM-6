@@ -8,6 +8,9 @@
     "metric": "l7_attack",
     "percentile": 75,
     "proba_cutoff": 0.5,
+    "tune_cutoff": true,
+    "label_mode": "rolling",
+    "rolling_days": 28,
     "label_high": "Cao",
     "label_low": "Thấp"
   },
@@ -32,6 +35,9 @@
     "test_ratio": 0.2,
     "min_days": 30,
     "seed": 42,
-    "rf_estimators": 300
+    "rf_estimators": 300,
+    "rf_min_samples_leaf_grid": [1, 5, 10, 20, 40],
+    "val_ratio": 0.25,
+    "regressor_target": "delta"
   }
 }

@@ -67,10 +67,34 @@ def test_gap_day_is_nan_not_shifted():
 
 
 def test_risk_columns_added():
-    df = build_features(vn_hourly(14), risk_hourly=vn_hourly(14, value=lambda t: 100.0 + t.day))
+    df = build_features(vn_hourly(14), dropna=False, risk_hourly=vn_hourly(14, value=lambda t: 100.0 + t.day))
     assert {"risk_value", "risk_lag_2", "risk_lag_7", "risk_roll_mean_3", "risk_roll_mean_7"} <= set(df.columns)
     row = df.loc["2026-01-10"]
     assert row["risk_value"] == 110 and row["risk_lag_2"] == 108 and row["risk_roll_mean_3"] == 107
+
+
+def test_risk_ref_is_rolling_percentile_of_known_days():
+    import numpy as np
+
+    from features import risk_reference
+    from ml_config import HORIZON, RISK_PERCENTILE, RISK_ROLLING_DAYS
+
+    s = pd.Series(np.arange(60, dtype=float), index=pd.date_range("2026-01-01", periods=60, tz=TIMEZONE))
+    window = s.iloc[60 - HORIZON - RISK_ROLLING_DAYS : 60 - HORIZON]
+    assert risk_reference(s).iloc[-1] == pytest.approx(np.percentile(window, RISK_PERCENTILE))
+    assert "risk_ref" in build_features(vn_hourly(40), risk_hourly=vn_hourly(40)).columns
+    # Không dùng giá trị của chính ngày đích hay ngày gần hơn HORIZON.
+    s = pd.Series([0.0] * 30 + [1000.0], index=pd.date_range("2026-01-01", periods=31, tz="Asia/Ho_Chi_Minh"))
+    assert risk_reference(s).iloc[-1] == 0.0
+
+
+def test_classifier_inputs_relative_to_references():
+    from features import classifier_inputs
+
+    df = pd.DataFrame({"lag_2": [10.0], "lag_7": [12.0], "dow": [3], "risk_lag_2": [5.0], "risk_ref": [4.0]})
+    X = classifier_inputs(df, ["lag_2", "lag_7", "dow", "risk_lag_2", "risk_ref"])
+    assert list(X.columns) == ["lag_7", "dow", "risk_lag_2"] and X.iloc[0].tolist() == [2.0, 3, 1.0]
+    assert list(classifier_inputs(df, ["lag_2", "risk_lag_2"]).columns) == ["lag_2", "risk_lag_2"]
 
 
 def test_cluster_features_daily_http_mean_l7_max_bot_mean():
@@ -103,3 +127,41 @@ def test_load_hourly_reads_only_radar_source():
     df = load_hourly(conn, "l7_attack")
     assert "silver.metrics_hourly" in conn.sql and "COALESCE(source, 'radar') = 'radar'" in conn.sql
     assert conn.params == ("l7_attack",) and list(df.columns) == ["ts", "value"] and len(df) == 1
+
+
+# ---- Edge case: múi giờ, kiểu dữ liệu, thứ tự đầu vào ----
+
+
+def test_single_day_has_no_complete_row():
+    assert build_features(vn_hourly(1)).empty
+    assert len(build_features(vn_hourly(1), dropna=False)) == 1
+
+
+def test_non_vietnam_timestamps_grouped_by_vietnam_day():
+    # 23:00 giờ -05:00 ngày 01-01 = 04:00 UTC ngày 01-02 = 11:00 giờ VN ngày 01-02.
+    ts = pd.DatetimeIndex(["2026-01-01 23:00-05:00"])
+    df = build_features(pd.DataFrame({"ts": ts, "value": [5.0]}), dropna=False)
+    assert list(df.index.strftime("%Y-%m-%d")) == ["2026-01-02"]
+
+
+def test_naive_timestamps_treated_as_utc():
+    h = vn_hourly(14)
+    naive = h.assign(ts=h["ts"].dt.tz_localize(None))
+    pd.testing.assert_frame_equal(build_features(naive), build_features(h))
+
+
+def test_integer_values_and_unsorted_input():
+    h = vn_hourly(14).assign(value=lambda d: d["value"].astype(int)).sample(frac=1, random_state=0)
+    pd.testing.assert_frame_equal(build_features(h), build_features(vn_hourly(14)))
+
+
+def test_load_hourly_empty_result():
+    class Conn:
+        def execute(self, sql, params=None):
+            return self
+
+        def fetchall(self):
+            return []
+
+    df = load_hourly(Conn(), "l7_attack")
+    assert list(df.columns) == ["ts", "value"] and df.empty

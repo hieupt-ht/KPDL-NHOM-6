@@ -85,3 +85,6 @@ docker-compose.override.yml
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Kết quả đánh giá sinh ra bởi training/evaluate_models.py
+models/eval/

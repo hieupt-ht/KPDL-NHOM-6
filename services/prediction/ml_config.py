@@ -30,6 +30,17 @@ def _validate(cfg: dict[str, Any]) -> None:
         )
     if cfg["horizon_days"] < 1 or cfg["min_hours_per_day"] < 1:
         raise ValueError("horizon_days và min_hours_per_day phải >= 1")
+    if cfg["training"]["regressor_target"] not in ("delta", "level"):
+        raise ValueError("training.regressor_target chỉ nhận delta hoặc level")
+    tr = cfg["training"]
+    if not tr["rf_min_samples_leaf_grid"] or min(tr["rf_min_samples_leaf_grid"]) < 1:
+        raise ValueError("training.rf_min_samples_leaf_grid phải là danh sách số nguyên >= 1")
+    if not 0 < tr["val_ratio"] < 1:
+        raise ValueError("training.val_ratio phải trong (0, 1)")
+    if cfg["risk"].get("label_mode", "train") not in ("train", "rolling"):
+        raise ValueError("risk.label_mode chỉ nhận train hoặc rolling")
+    if cfg["risk"].get("rolling_days", 28) < 7:
+        raise ValueError("risk.rolling_days phải >= 7")
     if not 0 < cfg["risk"]["percentile"] < 100:
         raise ValueError("risk.percentile phải trong (0, 100)")
     if not 0 < cfg["risk"]["proba_cutoff"] < 1:
@@ -57,12 +68,19 @@ MODEL_FEATURES: list[str] = [f"lag_{n}" for n in LAGS] + [f"roll_mean_{w}" for w
 
 RISK_METRIC: str = CONFIG["risk"]["metric"]  # metric tạo nhãn rủi ro (trung bình ngày > percentile train)
 RISK_PERCENTILE: float = CONFIG["risk"]["percentile"]
-RISK_PROBA_CUTOFF: float = CONFIG["risk"]["proba_cutoff"]
+RISK_PROBA_CUTOFF: float = CONFIG["risk"]["proba_cutoff"]  # mặc định; bundle có proba_cutoff riêng thì dùng của bundle
+# true: training chọn cutoff theo F1 trên đoạn cuối tập train (val_ratio), lưu vào bundle.
+RISK_TUNE_CUTOFF: bool = bool(CONFIG["risk"].get("tune_cutoff", False))
 LABEL_HIGH: str = CONFIG["risk"]["label_high"]
 LABEL_LOW: str = CONFIG["risk"]["label_low"]
 # Bộ phân loại dùng thêm lag và trung bình trượt của chính metric rủi ro.
 RISK_FEATURES: list[str] = ["risk_" + f for f in MODEL_FEATURES if f != "dow"]
-CLASSIFIER_FEATURES: list[str] = MODEL_FEATURES + RISK_FEATURES
+# "train": High = risk_value > percentile của cả tập train (ngưỡng cố định).
+# "rolling": High = risk_value > percentile của rolling_days ngày đã biết trước đó (risk_ref, chỉ dùng ngày
+# <= ngày đích - HORIZON): bắt "tăng đột biến so với gần đây", không lệch khi mức tấn công trôi.
+RISK_LABEL_MODE: str = CONFIG["risk"].get("label_mode", "train")
+RISK_ROLLING_DAYS: int = CONFIG["risk"].get("rolling_days", 28)
+CLASSIFIER_FEATURES: list[str] = MODEL_FEATURES + RISK_FEATURES + (["risk_ref"] if RISK_LABEL_MODE == "rolling" else [])
 
 _CL = CONFIG["cluster"]
 K_RANGE = range(_CL["k_range"][0], _CL["k_range"][1] + 1)
@@ -81,3 +99,34 @@ TEST_RATIO: float = TRAINING["test_ratio"]
 MIN_DAYS: int = TRAINING["min_days"]
 SEED: int = TRAINING["seed"]
 RF_ESTIMATORS: int = TRAINING["rf_estimators"]
+# Chuỗi ngày gần phẳng thì RF lá nhỏ học nhiễu: chọn min_samples_leaf theo MAE trên đoạn cuối của tập train.
+RF_LEAF_GRID: list[int] = list(TRAINING["rf_min_samples_leaf_grid"])
+VAL_RATIO: float = TRAINING["val_ratio"]
+# "delta": bộ hồi quy dự báo (value - lag nhỏ nhất) rồi cộng lại lag đó, để không bị kẹt trong khoảng giá trị
+# đã thấy lúc train khi mức trung bình trôi (Random Forest không ngoại suy). "level": dự báo thẳng value.
+REGRESSOR_TARGET: str = TRAINING["regressor_target"]
+BASE_FEATURE: str | None = f"lag_{min(LAGS)}" if REGRESSOR_TARGET == "delta" else None
+
+
+def name_clusters(centers, features: list[str]) -> dict[int, str]:
+    """Tên cụm theo tâm cụm (không gian đã chuẩn hóa; cột theo `features`), README 5.2.
+
+    k = 2: Bất thường (tấn công/bot cao nhất) và Bình thường. k = 3: thêm Cao điểm (traffic cao hơn
+    trong hai cụm còn lại). k khác: tên dự phòng "Cụm n" xếp theo traffic tăng dần.
+    Dùng chung cho services/clustering và training/evaluate_models.py.
+    """
+    import numpy as np
+
+    centers = np.asarray(centers, dtype=float)
+    traffic = centers[:, features.index(CLUSTER_TRAFFIC)]
+    attack = centers[:, [features.index(c) for c in CLUSTER_ATTACK]].max(axis=1)
+    k = len(centers)
+    if k in (2, 3):
+        anomaly = int(np.argmax(attack))
+        rest = sorted((c for c in range(k) if c != anomaly), key=lambda c: traffic[c])
+        names = {anomaly: CLUSTER_NAMES["anomaly"], rest[0]: CLUSTER_NAMES["normal"]}
+        if k == 3:
+            names[rest[1]] = CLUSTER_NAMES["peak"]
+        return names
+    order = np.argsort(traffic)
+    return {int(cid): CLUSTER_FALLBACK_NAME.format(n=r + 1) for r, cid in enumerate(order)}
