@@ -303,7 +303,7 @@ Ngày đặc trưng theo `Asia/Ho_Chi_Minh`, chỉ nhận ngày đủ 24 giờ h
 
 ## 6. API và xác thực SSO/OIDC
 
-> **Tiến độ Backend/API:** API đọc Gold đã có triển khai và kiểm thử riêng; xem [hợp đồng API](docs/api-contract.md) và [hướng dẫn chạy/kiểm thử](docs/backend-api-local.md). Đã bổ sung JWT/Keycloak, phân quyền Viewer/Admin, Jobs API và runner có nhật ký/chống chạy trùng; xem [hướng dẫn xác thực và job](docs/backend-auth-jobs.md). Tác vụ Analysis/ML hiện vẫn là stub và sẽ được ghi failed khi kích hoạt; Auth.js ở frontend cần tích hợp tiếp. Với schema Gold hiện tại, histogram/seasonal/correlation và status từ chối `start`/`end` bằng 422; timeseries/clusters hỗ trợ `limit`/`offset` và header phân trang. Các điểm dưới đây mô tả kiến trúc mục tiêu; hợp đồng chi tiết ghi rõ hành vi hiện tại và nullability.
+> **Tiến độ Backend/API:** API đọc Gold, JWT/Keycloak, Viewer/Admin, Jobs API và runner có nhật ký/chống chạy trùng đã triển khai; xem [hợp đồng API](docs/api-contract.md) và [xác thực/job](docs/backend-auth-jobs.md). Analysis đã nghiệm thu dữ liệu Radar; frontend live đã tích hợp Auth.js. Nhánh này tích hợp task ML với runner, nhưng chất lượng mô hình thật chưa đạt nghiệm thu; xem [kiểm chứng ML](docs/ml-integration-validation.md). Với schema Gold hiện tại, histogram/seasonal/correlation và status từ chối `start`/`end` bằng 422; timeseries/clusters hỗ trợ `limit`/`offset` và header phân trang.
 
 ### 6.1. Endpoint dữ liệu
 
