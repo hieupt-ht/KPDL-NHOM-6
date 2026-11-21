@@ -18,6 +18,7 @@ Silver: silver.metrics_hourly ──► training/train_models.py ──► model
 Quyết định theo Issue #13; mọi tham số nằm trong `services/prediction/ml_config.json`.
 
 - **Ngày tính theo giờ Việt Nam** (`Asia/Ho_Chi_Minh`, 17:00 UTC hôm trước đến 17:00 UTC hôm sau). Silver vẫn lưu UTC.
+- **Chỉ đọc Silver nguồn Radar** (`source = 'radar'`, giống Analysis), dòng demo không vào mô hình.
 - **Ngày chỉ hợp lệ khi đủ 24 mốc giờ.** Ngày thiếu hoặc chưa đủ (thường là ngày cuối vì Radar trễ) là NaN, không bao giờ được dùng.
 - **Dự báo D+2 tính từ ngày đủ dữ liệu cuối** (`horizon_days = 2`): đặc trưng của ngày đích D chỉ dùng ngày ≤ D−2. Khi hôm qua đã đủ dữ liệu thì D = ngày mai, đúng với API ("ngày mai" theo giờ VN). Vì không cần dữ liệu của hôm nay (chưa đủ giờ) nên không phải dự báo từ ngày thiếu.
 
