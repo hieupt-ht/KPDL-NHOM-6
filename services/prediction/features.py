@@ -3,9 +3,7 @@
 import pandas as pd
 import psycopg
 
-DEFAULT_METRIC = "http_traffic"
-LAGS = (1, 7)  # ngày
-WINDOWS = (3, 7)  # ngày
+from ml_config import LAGS, METRIC as DEFAULT_METRIC, WINDOWS  # noqa: F401  (cấu hình: ml_config.json)
 
 
 def load_hourly(conn: psycopg.Connection, metric: str = DEFAULT_METRIC) -> pd.DataFrame:

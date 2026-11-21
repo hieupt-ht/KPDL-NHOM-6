@@ -4,7 +4,7 @@ Luồng: Silver (metrics_hourly) -> đặc trưng ngày (features.build_features
 models/rf_regressor.joblib và rf_classifier.joblib -> upsert
 gold.forecast_continuous / gold.forecast_discrete -> nhật ký gold.service_runs.
 
-Quy ước (mặc định, nhóm chưa chốt):
+Quy ước (mặc định, nhóm chưa chốt; metric, nhãn, ngưỡng nằm trong ml_config.json):
 - Metric mục tiêu: http_traffic (DEFAULT_METRIC).
 - "Ngày mai" = ngày UTC liền sau ngày ĐẦY ĐỦ mới nhất trong Silver (bỏ ngày UTC hiện tại
   vì chưa đủ 24 giờ), khớp cách gộp ngày của features.py khi huấn luyện.
@@ -26,6 +26,7 @@ import numpy as np
 import pandas as pd
 
 from features import DEFAULT_METRIC, build_features, load_hourly
+from ml_config import LABEL_HIGH, LABEL_LOW, RISK_PROBA_CUTOFF
 
 log = logging.getLogger("prediction")
 
@@ -33,8 +34,6 @@ MODELS_DIR = Path(os.environ.get("MODELS_DIR", "/app/models"))
 REGRESSOR_FILE = "rf_regressor.joblib"
 CLASSIFIER_FILE = "rf_classifier.joblib"
 SERVICE = "prediction"
-LABEL_HIGH, LABEL_LOW = "Cao", "Thấp"
-RISK_PROBA_CUTOFF = 0.5
 
 
 def load_bundle(filename: str, models_dir: Path | str | None = None) -> dict[str, Any]:

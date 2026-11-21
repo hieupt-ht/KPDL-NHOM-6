@@ -18,22 +18,15 @@ import pandas as pd
 from psycopg.types.json import Jsonb
 
 from features import DEFAULT_METRIC, build_features, load_hourly
+from ml_config import CLUSTER_FALLBACK_NAME, CLUSTER_FEATURES, CLUSTER_NAMES, cluster_matrix
 
 log = logging.getLogger("clustering")
 
 MODELS_DIR = Path(os.environ.get("MODELS_DIR", "/app/models"))
 MODEL_FILE = "kmeans.joblib"
 SERVICE = "clustering"
-# Tên cụm khi k nhỏ; xếp theo mean `value` tăng dần. k > 3 dùng "Cụm n".
-NAMES = {2: ["Thấp", "Cao"], 3: ["Thấp", "Bình thường", "Cao"]}
-
-
-def cluster_matrix(df: pd.DataFrame) -> pd.DataFrame:
-    """Đặc trưng phân cụm. PHẢI trùng training.train_models.cluster_matrix (có test đối chiếu)."""
-    return pd.DataFrame(
-        {"value": df["value"], "dev_7": df["value"] - df["roll_mean_7"], "diff_1": df["value"] - df["lag_1"]},
-        index=df.index,
-    )
+# Tên cụm theo k (ml_config.json), xếp theo mean `value` tăng dần; k khác dùng tên dự phòng.
+NAMES = CLUSTER_NAMES
 
 
 def load_bundle(models_dir: Path | str | None = None) -> dict[str, Any]:
@@ -48,7 +41,7 @@ def build_daily_features(conn, metric: str = DEFAULT_METRIC) -> pd.DataFrame:
     """Đặc trưng phân cụm theo ngày (index = ngày UTC); bỏ ngày thiếu lag/trung bình trượt."""
     daily = build_features(load_hourly(conn, metric), dropna=False)
     if daily.empty:
-        return pd.DataFrame(columns=["value", "dev_7", "diff_1"], index=daily.index)
+        return pd.DataFrame(columns=CLUSTER_FEATURES, index=daily.index)
     return cluster_matrix(daily).dropna()
 
 
@@ -57,7 +50,7 @@ def cluster_names(bundle: dict[str, Any]) -> dict[int, str]:
     pipe, feats = bundle["model"], list(bundle["features"])
     centers = pipe[0].inverse_transform(pipe[-1].cluster_centers_)[:, feats.index("value")]
     order = np.argsort(centers)  # order[r] = cluster_id có mức thấp thứ r
-    labels = NAMES.get(len(order)) or [f"Cụm {r + 1}" for r in range(len(order))]
+    labels = NAMES.get(len(order)) or [CLUSTER_FALLBACK_NAME.format(n=r + 1) for r in range(len(order))]
     return {int(cid): labels[r] for r, cid in enumerate(order)}
 
 
