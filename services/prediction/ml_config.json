@@ -8,6 +8,7 @@
     "metric": "l7_attack",
     "percentile": 75,
     "proba_cutoff": 0.5,
+    "tune_cutoff": true,
     "label_high": "Cao",
     "label_low": "Thấp"
   },

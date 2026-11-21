@@ -163,7 +163,8 @@ def eval_classifier(bundle: dict, test: pd.DataFrame, out_dir: Path) -> tuple[di
     y = risk_label(test["risk_value"], thr)
     proba = model.predict_proba(test[feats])[:, list(model.classes_).index(1)] if 1 in model.classes_ else np.zeros(len(test))
     # Nhãn dự đoán theo đúng quy tắc service prediction: Cao nếu P(High) >= cutoff.
-    pred = (proba >= RISK_PROBA_CUTOFF).astype(int)
+    cutoff = bundle.get("proba_cutoff", RISK_PROBA_CUTOFF)
+    pred = (proba >= cutoff).astype(int)
     if bundle.get("risk_percentile") != RISK_PERCENTILE:
         log.warning(
             "Mô hình train với percentile %s, ml_config.json hiện là %s: hãy train lại.",
@@ -174,7 +175,7 @@ def eval_classifier(bundle: dict, test: pd.DataFrame, out_dir: Path) -> tuple[di
         "risk_metric": bundle.get("risk_metric"),
         "risk_percentile": bundle.get("risk_percentile"),
         "risk_threshold": thr,
-        "proba_cutoff": RISK_PROBA_CUTOFF,
+        "proba_cutoff": cutoff,
         "test_high_ratio": float(y.mean()),
         "n_test": len(y),
         "metrics": {k: _safe(f, y, pred, proba) for k, f in CLASSIFICATION_METRICS.items()},
@@ -318,7 +319,7 @@ def main() -> None:
         f"Nguồn: {r['data_source']}{tag}, metric={r['metric']}, rủi ro={r['risk_metric']}, test {r['test_range'][0]}..{r['test_range'][1]}\n"
         f"Regressor:  {_fmt(r['rf_regressor']['model'])}\n"
         f"  baseline lag_{r['rf_regressor']['baseline_lag']}: {_fmt(r['rf_regressor']['baseline_naive'])}\n"
-        f"Classifier: {_fmt(r['rf_classifier']['metrics'])}\n"
+        f"Classifier (cutoff={r['rf_classifier']['proba_cutoff']:.2f}): {_fmt(r['rf_classifier']['metrics'])}\n"
         f"KMeans k={r['kmeans']['k']}: {_fmt(r['kmeans']['metrics'])}\n"
         f"Đã lưu {len(r['figures'])} biểu đồ + eval_report.json vào "
         f"{a.out_dir or a.models_dir / 'eval'}"

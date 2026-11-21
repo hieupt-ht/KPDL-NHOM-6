@@ -64,7 +64,9 @@ MODEL_FEATURES: list[str] = [f"lag_{n}" for n in LAGS] + [f"roll_mean_{w}" for w
 
 RISK_METRIC: str = CONFIG["risk"]["metric"]  # metric tạo nhãn rủi ro (trung bình ngày > percentile train)
 RISK_PERCENTILE: float = CONFIG["risk"]["percentile"]
-RISK_PROBA_CUTOFF: float = CONFIG["risk"]["proba_cutoff"]
+RISK_PROBA_CUTOFF: float = CONFIG["risk"]["proba_cutoff"]  # mặc định; bundle có proba_cutoff riêng thì dùng của bundle
+# true: training chọn cutoff theo F1 trên đoạn cuối tập train (val_ratio), lưu vào bundle.
+RISK_TUNE_CUTOFF: bool = bool(CONFIG["risk"].get("tune_cutoff", False))
 LABEL_HIGH: str = CONFIG["risk"]["label_high"]
 LABEL_LOW: str = CONFIG["risk"]["label_low"]
 # Bộ phân loại dùng thêm lag và trung bình trượt của chính metric rủi ro.
