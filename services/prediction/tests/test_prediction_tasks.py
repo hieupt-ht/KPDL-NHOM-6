@@ -173,3 +173,118 @@ def test_run_prediction_records_failure(tmp_path):
         pt.run_prediction(FakeWarehouse(_hourly(30)), mart, tmp_path, now=NOW)
     status, error, _ = mart.runs[-1][1]
     assert status == "failed" and "rf_regressor.joblib" in error and mart.rollbacks == 1
+
+
+# ---- Edge case: dữ liệu rỗng / thiếu / lỗi ghi ----
+
+
+class FailingMart(FakeMart):
+    """Ghi gold.forecast_continuous luôn lỗi."""
+
+    def execute(self, sql, params=None):
+        if "gold.forecast_continuous" in sql:
+            raise RuntimeError("db down")
+        return super().execute(sql, params)
+
+
+def test_model_name_defaults_and_truncation():
+    assert pt.model_name({}, "rf_regressor") == "rf_regressor/?/?"
+    long = pt.model_name({"data_source": "s" * 200, "trained_at": "t"}, "rf_classifier")
+    assert len(long) == 128 and long.startswith("rf_classifier/")
+
+
+def test_target_row_none_when_only_partial_today():
+    ts = pd.date_range("2026-04-01", periods=6, freq="h", tz="UTC")  # chỉ có giờ của ngày hiện tại
+    h = pd.DataFrame({"ts": ts, "value": 1.0})
+    assert pt.build_target_row(h, tm.FEATURES, NOW) is None
+
+
+def test_target_row_needs_seven_complete_days():
+    # Ranh giới: 7 ngày đủ -> dự báo được ngày thứ 8; 6 ngày -> thiếu lag_7/roll_mean_7.
+    assert pt.build_target_row(_hourly(7), tm.FEATURES, NOW) is not None
+    assert pt.build_target_row(_hourly(6), tm.FEATURES, NOW) is None
+
+
+def test_target_row_converts_non_utc_now():
+    # 06:00 giờ +07 = 23:00 UTC ngày hôm trước -> ngày đủ cuối cùng lùi 1 ngày.
+    now = pd.Timestamp("2026-04-01 06:00", tz="Asia/Ho_Chi_Minh")
+    target, _ = pt.build_target_row(_hourly(30), tm.FEATURES, now)
+    assert str(target) == "2026-03-31"
+
+
+def test_target_row_feature_subset():
+    target, row = pt.build_target_row(_hourly(30), ["lag_1"], NOW)
+    assert list(row.columns) == ["lag_1"] and str(target) == "2026-04-01"
+
+
+def test_predict_continuous_uses_bundle_feature_order(models):
+    reg = pt.load_bundle(pt.REGRESSOR_FILE, models)
+    target, row = pt.build_target_row(_hourly(60), tm.FEATURES, NOW)
+    a = pt.predict_continuous(row, target, reg, FakeMart())
+    b = pt.predict_continuous(row[row.columns[::-1]], target, reg, FakeMart())
+    assert a == pytest.approx(b)
+
+
+def test_label_just_below_cutoff_is_low(models):
+    clf = pt.load_bundle(pt.CLASSIFIER_FILE, models)
+
+    class Stub:
+        classes_ = [0, 1]
+
+        def predict_proba(self, X):
+            return [[0.5001, 0.4999]]
+
+    _, row = pt.build_target_row(_hourly(30), tm.FEATURES, NOW)
+    label, p = pt.predict_discrete(row, NOW.date(), {**clf, "model": Stub()}, FakeMart())
+    assert label == pt.LABEL_LOW and p == pytest.approx(0.4999)
+
+
+def test_predict_discrete_uses_classes_order_not_position(models):
+    clf = pt.load_bundle(pt.CLASSIFIER_FILE, models)
+
+    class Reversed:
+        classes_ = [1, 0]  # cột 0 mới là lớp High
+
+        def predict_proba(self, X):
+            return [[0.8, 0.2]]
+
+    _, row = pt.build_target_row(_hourly(30), tm.FEATURES, NOW)
+    label, p = pt.predict_discrete(row, NOW.date(), {**clf, "model": Reversed()}, FakeMart())
+    assert label == pt.LABEL_HIGH and p == pytest.approx(0.8)
+
+
+def test_run_prediction_too_little_data_writes_nothing(models):
+    mart = FakeMart()
+    assert pt.run_prediction(FakeWarehouse(_hourly(5)), mart, models, now=NOW) == 0
+    assert not mart.cont and not mart.disc and mart.rollbacks == 0 and mart.runs[-1][1][0] == "success"
+
+
+def test_run_prediction_passes_metric_to_query(models):
+    seen = []
+
+    class Wh(FakeWarehouse):
+        def execute(self, sql, params=None):
+            seen.append(params)
+            return super().execute(sql, params)
+
+    pt.run_prediction(Wh(_hourly(30)), FakeMart(), models, metric="l7_attack", now=NOW)
+    assert seen == [("l7_attack",)]
+
+
+def test_run_prediction_db_error_rolls_back_and_reraises(models):
+    mart = FailingMart()
+    with pytest.raises(RuntimeError, match="db down"):
+        pt.run_prediction(FakeWarehouse(_hourly(60)), mart, models, now=NOW)
+    status, error, _ = mart.runs[-1][1]
+    assert status == "failed" and error == "db down" and mart.rollbacks == 1
+    assert not mart.disc  # lỗi ở bảng đầu thì không ghi bảng sau
+
+
+def test_run_prediction_missing_classifier_only(models, tmp_path):
+    import shutil
+
+    shutil.copy(models / pt.REGRESSOR_FILE, tmp_path / pt.REGRESSOR_FILE)
+    mart = FakeMart()
+    with pytest.raises(FileNotFoundError, match="rf_classifier"):
+        pt.run_prediction(FakeWarehouse(_hourly(30)), mart, tmp_path, now=NOW)
+    assert not mart.cont and mart.runs[-1][1][0] == "failed"

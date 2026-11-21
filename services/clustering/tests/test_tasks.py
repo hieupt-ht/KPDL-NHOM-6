@@ -142,3 +142,114 @@ def test_run_clustering_records_failure(tmp_path):
         ct.run_clustering(FakeWarehouse(tm.make_demo_hourly(days=40)), mart, tmp_path)
     status, error, _ = mart.runs[-1][1]
     assert status == "failed" and "kmeans.joblib" in error and mart.rollbacks == 1
+
+
+# ---- Edge case: dữ liệu rỗng / thiếu / lỗi ghi ----
+
+
+def _const_hourly(days: int, start: str = "2026-01-01") -> pd.DataFrame:
+    ts = pd.date_range(start, periods=days * 24, freq="h", tz="UTC")
+    return pd.DataFrame({"ts": ts, "value": [100.0 + t.day for t in ts]})
+
+
+class FailingMart(FakeMart):
+    """Ghi gold.cluster_results luôn lỗi."""
+
+    def __init__(self, message="db down"):
+        super().__init__()
+        self.message = message
+
+    def cursor(self):
+        class Cur:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def executemany(_, sql, rows):
+                raise RuntimeError(self.message)
+
+        return Cur()
+
+
+def test_build_daily_features_needs_eight_days():
+    # roll_mean_7/lag_1 cần 7 ngày lịch sử: 7 ngày -> rỗng, 8 ngày -> đúng 1 ngày.
+    assert ct.build_daily_features(FakeWarehouse(_const_hourly(7))).empty
+    f = ct.build_daily_features(FakeWarehouse(_const_hourly(8)))
+    assert len(f) == 1 and f.index[0] == pd.Timestamp("2026-01-08", tz="UTC")
+
+
+def test_build_daily_features_drops_gap_days():
+    h = _const_hourly(30)
+    h = h[h["ts"].dt.day != 15]  # thiếu hẳn ngày 15
+    f = ct.build_daily_features(FakeWarehouse(h))
+    assert not f.isna().any().any()
+    assert pd.Timestamp("2026-01-15", tz="UTC") not in f.index  # chính ngày thiếu
+    assert pd.Timestamp("2026-01-16", tz="UTC") not in f.index  # lag_1 thiếu
+
+
+def test_build_daily_features_passes_metric():
+    seen = []
+
+    class Wh(FakeWarehouse):
+        def execute(self, sql, params=None):
+            seen.append(params)
+            return super().execute(sql, params)
+
+    ct.build_daily_features(Wh(_const_hourly(10)), metric="l7_attack")
+    assert seen == [("l7_attack",)]
+
+
+def test_assign_clusters_empty_writes_nothing(env):
+    bundle = ct.load_bundle(env[0])
+    mart = FakeMart()
+    empty = ct.build_daily_features(FakeWarehouse(pd.DataFrame(columns=["ts", "value"])))
+    assert ct.assign_clusters(empty, bundle, mart) == 0
+    assert mart.upserts == [] and mart.commits == 0
+
+
+def test_assign_clusters_records_metric(env):
+    out, hourly = env
+    mart = FakeMart()
+    f = ct.build_daily_features(FakeWarehouse(hourly)).head(3)
+    ct.assign_clusters(f, ct.load_bundle(out), mart, metric="l7_attack")
+    assert len(mart.upserts) == 3 and all(r[3].obj["metric"] == "l7_attack" for r in mart.upserts)
+
+
+def test_cluster_names_more_than_three_clusters(tmp_path):
+    tm.train_models(demo=True, k=4, out_dir=tmp_path)
+    bundle = ct.load_bundle(tmp_path)
+    names = ct.cluster_names(bundle)
+    assert sorted(names.values()) == ["Cụm 1", "Cụm 2", "Cụm 3", "Cụm 4"]
+    pipe = bundle["model"]
+    level = pipe[0].inverse_transform(pipe[-1].cluster_centers_)[:, 0]
+    assert names[int(level.argmin())] == "Cụm 1" and names[int(level.argmax())] == "Cụm 4"
+
+
+def test_run_clustering_no_data_is_success_with_zero_rows(env):
+    mart = FakeMart()
+    n = ct.run_clustering(FakeWarehouse(pd.DataFrame(columns=["ts", "value"])), mart, env[0])
+    assert n == 0 and mart.upserts == [] and mart.rollbacks == 0
+    assert mart.runs[-1][1][0] == "success"
+
+
+def test_run_clustering_too_little_data_is_success_with_zero_rows(env):
+    mart = FakeMart()
+    assert ct.run_clustering(FakeWarehouse(_const_hourly(5)), mart, env[0]) == 0
+    assert mart.upserts == [] and mart.runs[-1][1][0] == "success"
+
+
+def test_run_clustering_db_error_rolls_back_and_reraises(env):
+    mart = FailingMart("db down")
+    with pytest.raises(RuntimeError, match="db down"):
+        ct.run_clustering(FakeWarehouse(env[1]), mart, env[0])
+    status, error, _ = mart.runs[-1][1]
+    assert status == "failed" and error == "db down" and mart.rollbacks == 1
+
+
+def test_run_clustering_truncates_long_error(env):
+    mart = FailingMart("x" * 5000)
+    with pytest.raises(RuntimeError):
+        ct.run_clustering(FakeWarehouse(env[1]), mart, env[0])
+    assert len(mart.runs[-1][1][1]) == 1000
