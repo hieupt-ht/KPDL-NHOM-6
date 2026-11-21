@@ -48,3 +48,13 @@ def test_risk_label():
     import pandas as pd
 
     assert risk_label(pd.Series([1, 5, 9]), 5).tolist() == [0, 0, 1]
+
+
+def test_uses_ml_config(evaluated):
+    from ml_config import CLUSTER_NAMES, METRIC, RISK_PROBA_CUTOFF
+
+    r = evaluated[1]
+    assert r["metric"] == METRIC and r["rf_classifier"]["proba_cutoff"] == RISK_PROBA_CUTOFF
+    k = r["kmeans"]["k"]
+    names = set(CLUSTER_NAMES.get(k, [])) or set(r["kmeans"]["cluster_sizes"])
+    assert set(r["kmeans"]["cluster_sizes"]) <= names

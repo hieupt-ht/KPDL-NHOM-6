@@ -7,10 +7,11 @@ Chạy từ thư mục gốc repo:
 
 Kết quả trong models/eval/: eval_report.json + các biểu đồ .png.
 
-Muốn đổi metric đánh giá: sửa/thêm vào REGRESSION_METRICS, CLASSIFICATION_METRICS,
-CLUSTER_METRICS bên dưới. Muốn đổi nhãn rủi ro (Issue #13): sửa `risk_label`
-và huấn luyện lại; ngưỡng đã lưu trong rf_classifier.joblib nên đánh giá luôn
-dùng đúng ngưỡng lúc train.
+Metric dự đoán, ngưỡng rủi ro (percentile, cutoff P(High)), tên nhãn/cụm, test_ratio...
+đọc từ services/prediction/ml_config.json (dùng chung với train/prediction/clustering):
+đổi quyết định Issue #13 thì sửa file đó, huấn luyện lại rồi chạy script này.
+Muốn thêm metric đánh giá: sửa REGRESSION_METRICS, CLASSIFICATION_METRICS,
+CLUSTER_METRICS bên dưới. Ngưỡng High dùng đúng giá trị lưu trong rf_classifier.joblib.
 """
 
 from __future__ import annotations
@@ -47,7 +48,19 @@ from sklearn.metrics import (  # noqa: E402
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from train_models import MIN_DAYS, MODELS_DIR, cluster_matrix, load_data, split  # noqa: E402
+from train_models import MODELS_DIR, load_data, split  # noqa: E402
+from ml_config import (  # noqa: E402  (train_models đã thêm services/prediction vào sys.path)
+    CLUSTER_FALLBACK_NAME,
+    CLUSTER_NAMES,
+    LABEL_HIGH,
+    LABEL_LOW,
+    METRIC,
+    MIN_DAYS,
+    RISK_PERCENTILE,
+    RISK_PROBA_CUTOFF,
+    WEAK_SILHOUETTE,
+    cluster_matrix,
+)
 
 log = logging.getLogger("evaluate_models")
 
@@ -139,18 +152,26 @@ def eval_regressor(bundle: dict, test: pd.DataFrame, out_dir: Path) -> tuple[dic
 def eval_classifier(bundle: dict, test: pd.DataFrame, out_dir: Path) -> tuple[dict, list[str]]:
     model, feats, thr = bundle["model"], bundle["features"], bundle["risk_threshold"]
     y = risk_label(test["value"], thr)
-    pred = model.predict(test[feats])
     proba = model.predict_proba(test[feats])[:, list(model.classes_).index(1)] if 1 in model.classes_ else np.zeros(len(test))
+    # Nhãn dự đoán theo đúng quy tắc service prediction: Cao nếu P(High) >= cutoff.
+    pred = (proba >= RISK_PROBA_CUTOFF).astype(int)
+    if bundle.get("risk_percentile") != RISK_PERCENTILE:
+        log.warning(
+            "Mô hình train với percentile %s, ml_config.json hiện là %s: hãy train lại.",
+            bundle.get("risk_percentile"),
+            RISK_PERCENTILE,
+        )
     res = {
         "risk_percentile": bundle.get("risk_percentile"),
         "risk_threshold": thr,
+        "proba_cutoff": RISK_PROBA_CUTOFF,
         "test_high_ratio": float(y.mean()),
         "n_test": len(y),
         "metrics": {k: _safe(f, y, pred, proba) for k, f in CLASSIFICATION_METRICS.items()},
     }
     figs = []
     fig, ax = plt.subplots(figsize=(4.5, 4))
-    ConfusionMatrixDisplay.from_predictions(y, pred, labels=[0, 1], display_labels=["Thấp", "Cao"], ax=ax, colorbar=False)
+    ConfusionMatrixDisplay.from_predictions(y, pred, labels=[0, 1], display_labels=[LABEL_LOW, LABEL_HIGH], ax=ax, colorbar=False)
     ax.set_title("Ma trận nhầm lẫn (rủi ro)")
     figs.append(_save(fig, out_dir, "classifier_confusion.png"))
 
@@ -167,20 +188,34 @@ def eval_classifier(bundle: dict, test: pd.DataFrame, out_dir: Path) -> tuple[di
 
 
 # ---- Phân cụm -----------------------------------------------------------------
+def cluster_labels(bundle: dict) -> dict[int, str]:
+    """cluster_id -> tên, xếp theo mean `value` của tâm cụm (khớp services/clustering/tasks.py)."""
+    pipe, feats = bundle["model"], list(bundle["features"])
+    centers = pipe[0].inverse_transform(pipe[-1].cluster_centers_)[:, feats.index("value")]
+    order = np.argsort(centers)
+    names = CLUSTER_NAMES.get(len(order)) or [CLUSTER_FALLBACK_NAME.format(n=r + 1) for r in range(len(order))]
+    return {int(cid): names[r] for r, cid in enumerate(order)}
+
+
 def eval_kmeans(bundle: dict, df: pd.DataFrame, saved_metrics: dict | None, out_dir: Path) -> tuple[dict, list[str]]:
     pipe = bundle["model"]
     X = cluster_matrix(df)
     labels = pipe.predict(X)
     scaled = pipe[0].transform(X)
+    names = cluster_labels(bundle)
     res = {"k": int(bundle["k"]), "metrics": {k: _safe(f, scaled, labels) for k, f in CLUSTER_METRICS.items()}}
+    sil = res["metrics"].get("silhouette")
+    res["weak_silhouette"] = sil is not None and sil < WEAK_SILHOUETTE
     sizes = pd.Series(labels).value_counts().sort_index()
-    res["cluster_sizes"] = {int(i): int(n) for i, n in sizes.items()}
+    res["cluster_sizes"] = {names[int(i)]: int(n) for i, n in sizes.items()}
 
     figs = []
     fig, ax = plt.subplots(figsize=(10, 4))
-    sc = ax.scatter(df.index, df["value"], c=labels, cmap="tab10", s=14)
+    for cid, name in sorted(names.items()):
+        m = labels == cid
+        ax.scatter(df.index[m], df["value"][m], s=14, label=name)
     ax.set(title=f"K-Means (k={res['k']}): cụm theo ngày", ylabel=bundle.get("metric", "value"))
-    ax.legend(*sc.legend_elements(), title="cụm", loc="upper left")
+    ax.legend(title="cụm", loc="upper left")
     figs.append(_save(fig, out_dir, "kmeans_clusters_over_time.png"))
 
     scores = (saved_metrics or {}).get("kmeans", {}).get("scores_by_k")
@@ -196,14 +231,14 @@ def eval_kmeans(bundle: dict, df: pd.DataFrame, saved_metrics: dict | None, out_
         figs.append(_save(fig, out_dir, "kmeans_k_selection.png"))
 
     fig, ax = plt.subplots(figsize=(4.5, 3.5))
-    sizes.plot.bar(ax=ax, title="Số ngày mỗi cụm", xlabel="cụm")
+    sizes.rename(index=names).plot.bar(ax=ax, title="Số ngày mỗi cụm", xlabel="cụm", rot=0)
     figs.append(_save(fig, out_dir, "kmeans_cluster_sizes.png"))
     return res, figs
 
 
 # ---- Điều phối -------------------------------------------------------------------
 def evaluate_models(
-    metric: str | None = None,
+    metric: str = METRIC,
     demo: bool = False,
     min_days: int = MIN_DAYS,
     models_dir: Path = MODELS_DIR,
@@ -220,9 +255,8 @@ def evaluate_models(
         bundles[name] = joblib.load(path)
 
     meta = bundles["rf_regressor"]
-    metric = metric or meta["metric"]
     if metric != meta["metric"]:
-        log.warning("Đánh giá metric %s nhưng mô hình train trên %s.", metric, meta["metric"])
+        log.warning("Đánh giá metric %s nhưng mô hình train trên %s: hãy train lại.", metric, meta["metric"])
     df, source = load_data(metric, demo, min_days)
     train, test = split(df)  # cùng cách chia với train_models để test không lẫn dữ liệu train
     if source != meta["data_source"]:
@@ -258,7 +292,7 @@ def _fmt(d: dict) -> str:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--metric", default=None, help="mặc định: metric lưu trong mô hình")
+    p.add_argument("--metric", default=None, help="mặc định: metric trong ml_config.json")
     p.add_argument("--demo", action="store_true")
     p.add_argument("--min-days", type=int, default=MIN_DAYS)
     p.add_argument("--models-dir", type=Path, default=MODELS_DIR)
