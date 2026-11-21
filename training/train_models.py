@@ -38,18 +38,24 @@ from sklearn.preprocessing import StandardScaler
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "services" / "prediction"))
 from features import DEFAULT_METRIC, build_features, load_hourly  # noqa: E402
+from ml_config import (  # noqa: E402
+    CLUSTER_FEATURES,
+    K_FORCED,
+    K_RANGE,
+    MIN_DAYS,
+    MODEL_FEATURES as FEATURES,
+    RF_ESTIMATORS,
+    RISK_PERCENTILE,
+    SEED,
+    TEST_RATIO,
+    WEAK_SILHOUETTE,
+    cluster_matrix,
+)
 
 log = logging.getLogger("train_models")
 
 MODELS_DIR = ROOT / "models"
-FEATURES = ["lag_1", "lag_7", "roll_mean_3", "roll_mean_7", "dow"]
-# Phân cụm trạng thái ngày: mức lưu lượng + độ lệch so với tuần trước + biến động so với hôm qua.
-CLUSTER_FEATURES = ["value", "dev_7", "diff_1"]
-K_RANGE = range(2, 7)
-WEAK_SILHOUETTE = 0.25
-TEST_RATIO = 0.2
-MIN_DAYS = 30
-SEED = 42
+# Đặc trưng, tham số huấn luyện, ngưỡng rủi ro, k: xem services/prediction/ml_config.json.
 
 
 def make_demo_hourly(days: int = 180, seed: int = SEED) -> pd.DataFrame:
@@ -86,14 +92,6 @@ def load_data(metric: str, demo: bool, min_days: int) -> tuple[pd.DataFrame, str
             return df, "silver"
         log.warning("Silver chỉ có %d ngày dùng được (< %d): chuyển sang dữ liệu DEMO.", len(df), min_days)
     return build_features(make_demo_hourly()), "demo"
-
-
-def cluster_matrix(df: pd.DataFrame) -> pd.DataFrame:
-    """Đặc trưng phân cụm; service clustering phải dùng đúng hàm này khi gán cụm."""
-    return pd.DataFrame(
-        {"value": df["value"], "dev_7": df["value"] - df["roll_mean_7"], "diff_1": df["value"] - df["lag_1"]},
-        index=df.index,
-    )
 
 
 def train_kmeans(df: pd.DataFrame, k: int | None) -> tuple[dict, dict]:
@@ -133,7 +131,7 @@ def split(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 
 def train_regressor(train: pd.DataFrame, test: pd.DataFrame) -> tuple[dict, dict]:
-    model = RandomForestRegressor(n_estimators=300, random_state=SEED, n_jobs=-1)
+    model = RandomForestRegressor(n_estimators=RF_ESTIMATORS, random_state=SEED, n_jobs=-1)
     model.fit(train[FEATURES], train["value"])
     pred = model.predict(test[FEATURES])
     metrics = {
@@ -150,7 +148,7 @@ def train_classifier(train: pd.DataFrame, test: pd.DataFrame, percentile: float)
     threshold = float(np.percentile(train["value"], percentile))
     y_train = (train["value"] > threshold).astype(int)
     y_test = (test["value"] > threshold).astype(int)
-    model = RandomForestClassifier(n_estimators=300, class_weight="balanced", random_state=SEED, n_jobs=-1)
+    model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, class_weight="balanced", random_state=SEED, n_jobs=-1)
     model.fit(train[FEATURES], y_train)
     pred = model.predict(test[FEATURES])
     metrics = {
@@ -167,8 +165,8 @@ def train_classifier(train: pd.DataFrame, test: pd.DataFrame, percentile: float)
 def train_models(
     metric: str = DEFAULT_METRIC,
     demo: bool = False,
-    k: int | None = None,
-    risk_percentile: float = 75.0,
+    k: int | None = K_FORCED,
+    risk_percentile: float = RISK_PERCENTILE,
     min_days: int = MIN_DAYS,
     out_dir: Path = MODELS_DIR,
 ) -> dict:
@@ -204,8 +202,8 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--metric", default=DEFAULT_METRIC)
     p.add_argument("--demo", action="store_true", help="dùng dữ liệu giả, không cần DB")
-    p.add_argument("--k", type=int, default=None, help="ép số cụm; mặc định chọn theo Silhouette")
-    p.add_argument("--risk-percentile", type=float, default=75.0, help="ngưỡng High risk (percentile tập train)")
+    p.add_argument("--k", type=int, default=K_FORCED, help="ép số cụm; mặc định chọn theo Silhouette")
+    p.add_argument("--risk-percentile", type=float, default=RISK_PERCENTILE, help="ngưỡng High risk (percentile tập train)")
     p.add_argument("--min-days", type=int, default=MIN_DAYS)
     p.add_argument("--out-dir", type=Path, default=MODELS_DIR)
     a = p.parse_args()

@@ -1,0 +1,32 @@
+{
+  "_comment": "Cấu hình ML dùng chung cho training/, services/prediction và services/clustering. Giá trị hiện tại là MẶC ĐỊNH chưa chốt (Issue #13): khi nhóm quyết định, chỉ sửa file này rồi huấn luyện lại (python training/train_models.py).",
+  "metric": "http_traffic",
+  "risk": {
+    "percentile": 75,
+    "proba_cutoff": 0.5,
+    "label_high": "Cao",
+    "label_low": "Thấp"
+  },
+  "features": {
+    "lags": [1, 7],
+    "windows": [3, 7]
+  },
+  "cluster": {
+    "k_range": [2, 6],
+    "k": null,
+    "weak_silhouette": 0.25,
+    "dev_window": 7,
+    "diff_lag": 1,
+    "names": {
+      "2": ["Thấp", "Cao"],
+      "3": ["Thấp", "Bình thường", "Cao"]
+    },
+    "fallback_name": "Cụm {n}"
+  },
+  "training": {
+    "test_ratio": 0.2,
+    "min_days": 30,
+    "seed": 42,
+    "rf_estimators": 300
+  }
+}
