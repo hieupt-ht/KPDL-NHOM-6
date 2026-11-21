@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from features import build_cluster_features, build_features, daily_agg
+from features import build_cluster_features, build_features, daily_agg, load_hourly
 from ml_config import TIMEZONE
 
 
@@ -75,3 +75,18 @@ def test_cluster_features_drop_day_missing_in_any_metric():
     df = build_cluster_features({"http_traffic": http, "l7_attack": l7, "bot_share": bot[day != 3]})
     assert len(df) == 4 and pd.Timestamp("2026-01-03", tz=TIMEZONE) not in df.index
     assert build_cluster_features({}).empty
+
+
+def test_load_hourly_reads_only_radar_source():
+    class Conn:
+        def execute(self, sql, params=None):
+            self.sql, self.params = sql, params
+            return self
+
+        def fetchall(self):
+            return [(pd.Timestamp("2026-01-01", tz="UTC"), 1.0)]
+
+    conn = Conn()
+    df = load_hourly(conn, "l7_attack")
+    assert "silver.metrics_hourly" in conn.sql and "COALESCE(source, 'radar') = 'radar'" in conn.sql
+    assert conn.params == ("l7_attack",) and list(df.columns) == ["ts", "value"] and len(df) == 1

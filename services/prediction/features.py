@@ -23,9 +23,14 @@ from ml_config import (  # noqa: F401  (cấu hình: ml_config.json)
 
 
 def load_hourly(conn: psycopg.Connection, metric: str = DEFAULT_METRIC) -> pd.DataFrame:
-    """Đọc (ts, value) theo giờ của một metric từ silver.metrics_hourly."""
+    """Đọc (ts, value) theo giờ của một metric từ silver.metrics_hourly.
+
+    Chỉ lấy dữ liệu Radar thật (`source = 'radar'`), giống service Analysis, để dòng demo không lẫn vào mô hình.
+    """
     rows = conn.execute(
-        "SELECT ts, value FROM silver.metrics_hourly WHERE metric = %s ORDER BY ts", (metric,)
+        "SELECT ts, value FROM silver.metrics_hourly "
+        "WHERE metric = %s AND COALESCE(source, 'radar') = 'radar' ORDER BY ts",
+        (metric,),
     ).fetchall()
     return pd.DataFrame(rows, columns=["ts", "value"])
 
