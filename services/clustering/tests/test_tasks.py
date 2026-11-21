@@ -1,7 +1,9 @@
 import importlib.util
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -26,14 +28,14 @@ class _Result:
 
 
 class FakeWarehouse:
-    """Trả về (ts, value) giả cho truy vấn Silver."""
+    """Trả về (ts, value) giả theo metric trong truy vấn Silver."""
 
-    def __init__(self, hourly: pd.DataFrame):
-        self.rows = list(hourly.itertuples(index=False, name=None))
+    def __init__(self, data: dict[str, pd.DataFrame]):
+        self.data = {m: list(df.itertuples(index=False, name=None)) for m, df in data.items()}
 
     def execute(self, sql, params=None):
         assert "silver.metrics_hourly" in sql
-        return _Result(self.rows)
+        return _Result(self.data.get(params[0], []))
 
 
 class FakeMart:
@@ -72,51 +74,63 @@ class FakeMart:
 def env(tmp_path_factory):
     out = tmp_path_factory.mktemp("models")
     tm.train_models(demo=True, out_dir=out)
-    return out, tm.make_demo_hourly(days=90)
+    return out, tm.make_demo_data(days=90)
 
 
-def test_cluster_matrix_matches_training(env):
-    daily = tm.build_features(env[1], dropna=False)
-    pd.testing.assert_frame_equal(ct.cluster_matrix(daily), tm.cluster_matrix(daily))
+def _bundle(centers):
+    """Bundle giả: chỉ cần tâm cụm (đã chuẩn hóa) và thứ tự cột, như pipeline thật."""
+    return {"model": [None, SimpleNamespace(cluster_centers_=np.array(centers, dtype=float))], "features": tm.CLUSTER_FEATURES}
 
 
 def test_build_daily_features_columns_and_no_nan(env):
     f = ct.build_daily_features(FakeWarehouse(env[1]))
-    assert list(f.columns) == tm.CLUSTER_FEATURES and not f.isna().any().any() and len(f) > 60
+    assert list(f.columns) == ["http_mean", "l7_max", "bot_mean"] and not f.isna().any().any() and len(f) > 60
+    assert str(f.index.tz) == "Asia/Ho_Chi_Minh"
 
 
 def test_build_daily_features_empty():
-    assert ct.build_daily_features(FakeWarehouse(pd.DataFrame(columns=["ts", "value"]))).empty
+    assert ct.build_daily_features(FakeWarehouse({})).empty
 
 
 def test_assign_clusters_upserts_all_days(env):
-    out, hourly = env
+    out, data = env
     bundle = ct.load_bundle(out)
-    f = ct.build_daily_features(FakeWarehouse(hourly))
+    f = ct.build_daily_features(FakeWarehouse(data))
     mart = FakeMart()
     assert ct.assign_clusters(f, bundle, mart) == len(f) == len(mart.upserts)
     day, cid, name, feats = mart.upserts[0]
     assert day == f.index[0].date() and 0 <= cid < bundle["k"] and name
-    assert set(feats.obj) == {"value", "dev_7", "diff_1", "metric"}
+    assert set(feats.obj) == {"http_mean", "l7_max", "bot_mean", "metric"}
     # Mỗi cluster_id luôn cùng một tên.
     assert len({(r[1], r[2]) for r in mart.upserts}) == len({r[1] for r in mart.upserts})
 
 
-def test_cluster_names_sorted_by_level(env):
-    bundle = ct.load_bundle(env[0])
-    names = ct.cluster_names(bundle)
-    assert sorted(names) == list(range(bundle["k"]))
-    pipe = bundle["model"]
-    level = pipe[0].inverse_transform(pipe[-1].cluster_centers_)[:, 0]
-    lowest, highest = int(level.argmin()), int(level.argmax())
-    expected = ct.NAMES.get(bundle["k"])
-    first, last = (expected[0], expected[-1]) if expected else ("Cụm 1", f"Cụm {bundle['k']}")
-    assert names[lowest] == first and names[highest] == last
+def test_trained_clusters_use_readme_names_and_flag_attack_days(env):
+    out, data = env
+    mart = FakeMart()
+    ct.run_clustering(FakeWarehouse(data), mart, out)
+    assert {r[2] for r in mart.upserts} == {"Bình thường", "Cao điểm", "Bất thường"}
+    # Ngày demo có tấn công (l7_max cao) phải rơi vào cụm Bất thường.
+    attack = [r for r in mart.upserts if r[3].obj["l7_max"] > 35]
+    assert attack and all(r[2] == "Bất thường" for r in attack)
 
 
-def test_cluster_names_three_clusters(tmp_path):
-    tm.train_models(demo=True, k=3, out_dir=tmp_path)
-    assert sorted(ct.cluster_names(ct.load_bundle(tmp_path)).values()) == sorted(ct.NAMES[3])
+def test_cluster_names_rule_three_clusters():
+    # cột: http_mean, l7_max, bot_mean (đã chuẩn hóa)
+    names = ct.cluster_names(_bundle([[0.2, 0.1, 0.0], [2.0, 0.3, 0.2], [0.5, 2.5, -0.1]]))
+    assert names == {0: "Bình thường", 1: "Cao điểm", 2: "Bất thường"}
+
+
+def test_cluster_names_anomaly_by_bot_even_if_traffic_is_highest():
+    # Cụm 1 có traffic cao nhất nhưng bot cao hơn mọi cụm khác: vẫn là Bất thường, không phải Cao điểm.
+    names = ct.cluster_names(_bundle([[-1.0, 0.0, 0.0], [3.0, 0.0, 2.0], [1.0, 0.1, 0.1]]))
+    assert names == {0: "Bình thường", 1: "Bất thường", 2: "Cao điểm"}
+
+
+def test_cluster_names_two_and_many_clusters():
+    assert ct.cluster_names(_bundle([[1.0, 0.0, 0.0], [0.0, 2.0, 0.0]])) == {0: "Bình thường", 1: "Bất thường"}
+    four = ct.cluster_names(_bundle([[3, 0, 0], [0, 0, 0], [2, 0, 0], [1, 0, 0]]))
+    assert four == {1: "Cụm 1", 3: "Cụm 2", 2: "Cụm 3", 0: "Cụm 4"}  # xếp theo traffic tăng dần
 
 
 def test_missing_model_error(tmp_path):
@@ -125,8 +139,8 @@ def test_missing_model_error(tmp_path):
 
 
 def test_run_clustering_success_and_idempotent(env):
-    out, hourly = env
-    wh, mart = FakeWarehouse(hourly), FakeMart()
+    out, data = env
+    wh, mart = FakeWarehouse(data), FakeMart()
     n1 = ct.run_clustering(wh, mart, out)
     n2 = ct.run_clustering(wh, mart, out)
     assert n1 == n2 > 0
@@ -139,17 +153,21 @@ def test_run_clustering_success_and_idempotent(env):
 def test_run_clustering_records_failure(tmp_path):
     mart = FakeMart()
     with pytest.raises(FileNotFoundError):
-        ct.run_clustering(FakeWarehouse(tm.make_demo_hourly(days=40)), mart, tmp_path)
+        ct.run_clustering(FakeWarehouse(tm.make_demo_data(days=40)), mart, tmp_path)
     status, error, _ = mart.runs[-1][1]
     assert status == "failed" and "kmeans.joblib" in error and mart.rollbacks == 1
 
 
 # ---- Edge case: dữ liệu rỗng / thiếu / lỗi ghi ----
 
+TZ = "Asia/Ho_Chi_Minh"
 
-def _const_hourly(days: int, start: str = "2026-01-01") -> pd.DataFrame:
-    ts = pd.date_range(start, periods=days * 24, freq="h", tz="UTC")
-    return pd.DataFrame({"ts": ts, "value": [100.0 + t.day for t in ts]})
+
+def _const_data(days: int, start: str = "2026-01-01", hours: int | None = None) -> dict[str, pd.DataFrame]:
+    """Ba metric, mỗi ngày VN đủ 24 giờ (hoặc chỉ `hours` giờ đầu để thành ngày chưa đủ)."""
+    ts = pd.date_range(pd.Timestamp(start, tz=TZ), periods=hours or days * 24, freq="h")
+    frame = pd.DataFrame({"ts": ts.tz_convert("UTC"), "value": [100.0 + t.day for t in ts]})
+    return {m: frame for m in ("http_traffic", "l7_attack", "bot_share")}
 
 
 class FailingMart(FakeMart):
@@ -173,23 +191,25 @@ class FailingMart(FakeMart):
         return Cur()
 
 
-def test_build_daily_features_needs_eight_days():
-    # roll_mean_7/lag_1 cần 7 ngày lịch sử: 7 ngày -> rỗng, 8 ngày -> đúng 1 ngày.
-    assert ct.build_daily_features(FakeWarehouse(_const_hourly(7))).empty
-    f = ct.build_daily_features(FakeWarehouse(_const_hourly(8)))
-    assert len(f) == 1 and f.index[0] == pd.Timestamp("2026-01-08", tz="UTC")
+def test_build_daily_features_one_full_day_is_enough_but_partial_day_is_not():
+    # Đặc trưng phân cụm không cần lịch sử (không lag): 1 ngày đủ giờ -> 1 dòng; 23 giờ -> rỗng.
+    f = ct.build_daily_features(FakeWarehouse(_const_data(1)))
+    assert len(f) == 1 and f.index[0] == pd.Timestamp("2026-01-01", tz=TZ)
+    assert ct.build_daily_features(FakeWarehouse(_const_data(1, hours=23))).empty
 
 
-def test_build_daily_features_drops_gap_days():
-    h = _const_hourly(30)
-    h = h[h["ts"].dt.day != 15]  # thiếu hẳn ngày 15
-    f = ct.build_daily_features(FakeWarehouse(h))
-    assert not f.isna().any().any()
-    assert pd.Timestamp("2026-01-15", tz="UTC") not in f.index  # chính ngày thiếu
-    assert pd.Timestamp("2026-01-16", tz="UTC") not in f.index  # lag_1 thiếu
+def test_build_daily_features_drops_only_the_gap_day():
+    data = _const_data(30)
+    h = data["bot_share"]
+    day = pd.to_datetime(h["ts"]).dt.tz_convert(TZ).dt.day
+    data["bot_share"] = h[day != 15]  # thiếu hẳn ngày 15 ở một metric
+    f = ct.build_daily_features(FakeWarehouse(data))
+    assert not f.isna().any().any() and len(f) == 29
+    assert pd.Timestamp("2026-01-15", tz=TZ) not in f.index
+    assert pd.Timestamp("2026-01-16", tz=TZ) in f.index  # không còn phụ thuộc lag
 
 
-def test_build_daily_features_passes_metric():
+def test_build_daily_features_queries_all_cluster_metrics():
     seen = []
 
     class Wh(FakeWarehouse):
@@ -197,22 +217,22 @@ def test_build_daily_features_passes_metric():
             seen.append(params)
             return super().execute(sql, params)
 
-    ct.build_daily_features(Wh(_const_hourly(10)), metric="l7_attack")
-    assert seen == [("l7_attack",)]
+    ct.build_daily_features(Wh(_const_data(3)))
+    assert seen == [("http_traffic",), ("l7_attack",), ("bot_share",)]
 
 
 def test_assign_clusters_empty_writes_nothing(env):
     bundle = ct.load_bundle(env[0])
     mart = FakeMart()
-    empty = ct.build_daily_features(FakeWarehouse(pd.DataFrame(columns=["ts", "value"])))
+    empty = ct.build_daily_features(FakeWarehouse({}))
     assert ct.assign_clusters(empty, bundle, mart) == 0
     assert mart.upserts == [] and mart.commits == 0
 
 
 def test_assign_clusters_records_metric(env):
-    out, hourly = env
+    out, data = env
     mart = FakeMart()
-    f = ct.build_daily_features(FakeWarehouse(hourly)).head(3)
+    f = ct.build_daily_features(FakeWarehouse(data)).head(3)
     ct.assign_clusters(f, ct.load_bundle(out), mart, metric="l7_attack")
     assert len(mart.upserts) == 3 and all(r[3].obj["metric"] == "l7_attack" for r in mart.upserts)
 
@@ -222,21 +242,20 @@ def test_cluster_names_more_than_three_clusters(tmp_path):
     bundle = ct.load_bundle(tmp_path)
     names = ct.cluster_names(bundle)
     assert sorted(names.values()) == ["Cụm 1", "Cụm 2", "Cụm 3", "Cụm 4"]
-    pipe = bundle["model"]
-    level = pipe[0].inverse_transform(pipe[-1].cluster_centers_)[:, 0]
+    level = bundle["model"][-1].cluster_centers_[:, 0]  # http_mean đã chuẩn hóa
     assert names[int(level.argmin())] == "Cụm 1" and names[int(level.argmax())] == "Cụm 4"
 
 
 def test_run_clustering_no_data_is_success_with_zero_rows(env):
     mart = FakeMart()
-    n = ct.run_clustering(FakeWarehouse(pd.DataFrame(columns=["ts", "value"])), mart, env[0])
+    n = ct.run_clustering(FakeWarehouse({}), mart, env[0])
     assert n == 0 and mart.upserts == [] and mart.rollbacks == 0
     assert mart.runs[-1][1][0] == "success"
 
 
 def test_run_clustering_too_little_data_is_success_with_zero_rows(env):
     mart = FakeMart()
-    assert ct.run_clustering(FakeWarehouse(_const_hourly(5)), mart, env[0]) == 0
+    assert ct.run_clustering(FakeWarehouse(_const_data(1, hours=12)), mart, env[0]) == 0
     assert mart.upserts == [] and mart.runs[-1][1][0] == "success"
 
 

@@ -3,11 +3,11 @@
 Chạy từ thư mục gốc repo:
     python training/evaluate_models.py                # Silver qua WAREHOUSE_DSN (rơi về demo nếu thiếu dữ liệu)
     python training/evaluate_models.py --demo
-    python training/evaluate_models.py --metric l7_attack
+    python training/evaluate_models.py --metric http_traffic --risk-metric l7_attack
 
 Kết quả trong models/eval/: eval_report.json + các biểu đồ .png.
 
-Metric dự đoán, ngưỡng rủi ro (percentile, cutoff P(High)), tên nhãn/cụm, test_ratio...
+Metric đích, metric rủi ro (l7_attack), ngưỡng rủi ro (percentile, cutoff P(High)), tên nhãn/cụm, horizon, test_ratio...
 đọc từ services/prediction/ml_config.json (dùng chung với train/prediction/clustering):
 đổi quyết định Issue #13 thì sửa file đó, huấn luyện lại rồi chạy script này.
 Muốn thêm metric đánh giá: sửa REGRESSION_METRICS, CLASSIFICATION_METRICS,
@@ -50,16 +50,19 @@ from sklearn.metrics import (  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from train_models import MODELS_DIR, load_data, split  # noqa: E402
 from ml_config import (  # noqa: E402  (train_models đã thêm services/prediction vào sys.path)
-    CLUSTER_FALLBACK_NAME,
-    CLUSTER_NAMES,
+    CLUSTER_FEATURES,
+    CLUSTER_TRAFFIC,
+    HORIZON,
     LABEL_HIGH,
     LABEL_LOW,
+    LAGS,
     METRIC,
     MIN_DAYS,
+    RISK_METRIC,
     RISK_PERCENTILE,
     RISK_PROBA_CUTOFF,
     WEAK_SILHOUETTE,
-    cluster_matrix,
+    name_clusters,
 )
 
 log = logging.getLogger("evaluate_models")
@@ -90,7 +93,7 @@ CLUSTER_METRICS = {
 
 
 def risk_label(values: pd.Series, threshold: float) -> pd.Series:
-    """Nhãn High risk (1) = value > ngưỡng. Phải khớp train_classifier()."""
+    """Nhãn High risk (1) = trung bình ngày của metric rủi ro > ngưỡng. Phải khớp train_classifier()."""
     return (values > threshold).astype(int)
 
 
@@ -115,19 +118,21 @@ def _save(fig, out_dir: Path, name: str) -> str:
 def eval_regressor(bundle: dict, test: pd.DataFrame, out_dir: Path) -> tuple[dict, list[str]]:
     model, feats = bundle["model"], bundle["features"]
     y, pred = test["value"].to_numpy(), model.predict(test[feats])
-    base = test["lag_1"].to_numpy()  # mốc so sánh: ngày mai = hôm nay
+    base_lag = min(LAGS)
+    base = test[f"lag_{base_lag}"].to_numpy()  # mốc so sánh: ngày đích = giá trị ngày đủ gần nhất đã biết
     res = {
         "model": {k: _safe(f, y, pred) for k, f in REGRESSION_METRICS.items()},
-        "baseline_lag1": {k: _safe(f, y, base) for k, f in REGRESSION_METRICS.items()},
+        "baseline_naive": {k: _safe(f, y, base) for k, f in REGRESSION_METRICS.items()},
+        "baseline_lag": base_lag,
     }
-    if res["model"]["mae"] is not None and res["baseline_lag1"]["mae"]:
-        res["mae_improvement_vs_baseline_pct"] = (1 - res["model"]["mae"] / res["baseline_lag1"]["mae"]) * 100
+    if res["model"]["mae"] is not None and res["baseline_naive"]["mae"]:
+        res["mae_improvement_vs_baseline_pct"] = (1 - res["model"]["mae"] / res["baseline_naive"]["mae"]) * 100
 
     figs = []
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.plot(test.index, y, label="Thực tế", lw=1.5)
     ax.plot(test.index, pred, label="Dự đoán (RF)", lw=1.5)
-    ax.plot(test.index, base, label="Baseline lag_1", lw=1, ls=":", alpha=0.7)
+    ax.plot(test.index, base, label=f"Baseline lag_{base_lag}", lw=1, ls=":", alpha=0.7)
     ax.set(title="Hồi quy: thực tế vs dự đoán (tập test)", ylabel=bundle.get("metric", "value"))
     ax.legend()
     figs.append(_save(fig, out_dir, "regressor_actual_vs_pred.png"))
@@ -151,7 +156,7 @@ def eval_regressor(bundle: dict, test: pd.DataFrame, out_dir: Path) -> tuple[dic
 # ---- Phân loại rủi ro --------------------------------------------------------
 def eval_classifier(bundle: dict, test: pd.DataFrame, out_dir: Path) -> tuple[dict, list[str]]:
     model, feats, thr = bundle["model"], bundle["features"], bundle["risk_threshold"]
-    y = risk_label(test["value"], thr)
+    y = risk_label(test["risk_value"], thr)
     proba = model.predict_proba(test[feats])[:, list(model.classes_).index(1)] if 1 in model.classes_ else np.zeros(len(test))
     # Nhãn dự đoán theo đúng quy tắc service prediction: Cao nếu P(High) >= cutoff.
     pred = (proba >= RISK_PROBA_CUTOFF).astype(int)
@@ -162,6 +167,7 @@ def eval_classifier(bundle: dict, test: pd.DataFrame, out_dir: Path) -> tuple[di
             RISK_PERCENTILE,
         )
     res = {
+        "risk_metric": bundle.get("risk_metric"),
         "risk_percentile": bundle.get("risk_percentile"),
         "risk_threshold": thr,
         "proba_cutoff": RISK_PROBA_CUTOFF,
@@ -189,17 +195,13 @@ def eval_classifier(bundle: dict, test: pd.DataFrame, out_dir: Path) -> tuple[di
 
 # ---- Phân cụm -----------------------------------------------------------------
 def cluster_labels(bundle: dict) -> dict[int, str]:
-    """cluster_id -> tên, xếp theo mean `value` của tâm cụm (khớp services/clustering/tasks.py)."""
-    pipe, feats = bundle["model"], list(bundle["features"])
-    centers = pipe[0].inverse_transform(pipe[-1].cluster_centers_)[:, feats.index("value")]
-    order = np.argsort(centers)
-    names = CLUSTER_NAMES.get(len(order)) or [CLUSTER_FALLBACK_NAME.format(n=r + 1) for r in range(len(order))]
-    return {int(cid): names[r] for r, cid in enumerate(order)}
+    """cluster_id -> tên theo tâm cụm (cùng quy tắc services/clustering/tasks.py, ml_config.name_clusters)."""
+    return name_clusters(bundle["model"][-1].cluster_centers_, list(bundle["features"]))
 
 
-def eval_kmeans(bundle: dict, df: pd.DataFrame, saved_metrics: dict | None, out_dir: Path) -> tuple[dict, list[str]]:
+def eval_kmeans(bundle: dict, cl: pd.DataFrame, saved_metrics: dict | None, out_dir: Path) -> tuple[dict, list[str]]:
     pipe = bundle["model"]
-    X = cluster_matrix(df)
+    X = cl[CLUSTER_FEATURES]
     labels = pipe.predict(X)
     scaled = pipe[0].transform(X)
     names = cluster_labels(bundle)
@@ -213,8 +215,8 @@ def eval_kmeans(bundle: dict, df: pd.DataFrame, saved_metrics: dict | None, out_
     fig, ax = plt.subplots(figsize=(10, 4))
     for cid, name in sorted(names.items()):
         m = labels == cid
-        ax.scatter(df.index[m], df["value"][m], s=14, label=name)
-    ax.set(title=f"K-Means (k={res['k']}): cụm theo ngày", ylabel=bundle.get("metric", "value"))
+        ax.scatter(cl.index[m], cl[CLUSTER_TRAFFIC][m], s=14, label=name)
+    ax.set(title=f"K-Means (k={res['k']}): cụm theo ngày VN", ylabel=CLUSTER_TRAFFIC)
     ax.legend(title="cụm", loc="upper left")
     figs.append(_save(fig, out_dir, "kmeans_clusters_over_time.png"))
 
@@ -239,6 +241,7 @@ def eval_kmeans(bundle: dict, df: pd.DataFrame, saved_metrics: dict | None, out_
 # ---- Điều phối -------------------------------------------------------------------
 def evaluate_models(
     metric: str = METRIC,
+    risk_metric: str = RISK_METRIC,
     demo: bool = False,
     min_days: int = MIN_DAYS,
     models_dir: Path = MODELS_DIR,
@@ -257,7 +260,9 @@ def evaluate_models(
     meta = bundles["rf_regressor"]
     if metric != meta["metric"]:
         log.warning("Đánh giá metric %s nhưng mô hình train trên %s: hãy train lại.", metric, meta["metric"])
-    df, source = load_data(metric, demo, min_days)
+    if meta.get("horizon_days") != HORIZON:
+        log.warning("Mô hình train với horizon_days=%s, ml_config.json hiện là %s: hãy train lại.", meta.get("horizon_days"), HORIZON)
+    df, cl, source = load_data(metric, risk_metric, demo, min_days)
     train, test = split(df)  # cùng cách chia với train_models để test không lẫn dữ liệu train
     if source != meta["data_source"]:
         log.warning("Nguồn dữ liệu đánh giá (%s) khác lúc train (%s).", source, meta["data_source"])
@@ -270,12 +275,15 @@ def evaluate_models(
 
     reg, f1 = eval_regressor(bundles["rf_regressor"], test, out_dir)
     clf, f2 = eval_classifier(bundles["rf_classifier"], test, out_dir)
-    km, f3 = eval_kmeans(bundles["kmeans"], df, saved_metrics, out_dir)
+    km, f3 = eval_kmeans(bundles["kmeans"], cl, saved_metrics, out_dir)
     report = {
         "data_source": source,
         "metric": metric,
+        "risk_metric": risk_metric,
+        "horizon_days": meta.get("horizon_days"),
         "trained_at": meta["trained_at"],
         "n_days": len(df),
+        "cluster_n_days": len(cl),
         "test_range": test_range,
         "rf_regressor": reg,
         "rf_classifier": clf,
@@ -292,19 +300,20 @@ def _fmt(d: dict) -> str:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--metric", default=METRIC, help="mặc định: metric trong ml_config.json")
+    p.add_argument("--metric", default=METRIC, help="metric đích, mặc định: metric trong ml_config.json")
+    p.add_argument("--risk-metric", default=RISK_METRIC, help="metric tạo nhãn rủi ro, mặc định: trong ml_config.json")
     p.add_argument("--demo", action="store_true")
     p.add_argument("--min-days", type=int, default=MIN_DAYS)
     p.add_argument("--models-dir", type=Path, default=MODELS_DIR)
     p.add_argument("--out-dir", type=Path, default=None, help="mặc định: <models-dir>/eval")
     a = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    r = evaluate_models(a.metric, a.demo, a.min_days, a.models_dir, a.out_dir)
+    r = evaluate_models(a.metric, a.risk_metric, a.demo, a.min_days, a.models_dir, a.out_dir)
     tag = " [DEMO]" if r["data_source"] == "demo" else ""
     print(
-        f"Nguồn: {r['data_source']}{tag}, metric={r['metric']}, test {r['test_range'][0]}..{r['test_range'][1]}\n"
+        f"Nguồn: {r['data_source']}{tag}, metric={r['metric']}, rủi ro={r['risk_metric']}, test {r['test_range'][0]}..{r['test_range'][1]}\n"
         f"Regressor:  {_fmt(r['rf_regressor']['model'])}\n"
-        f"  baseline: {_fmt(r['rf_regressor']['baseline_lag1'])}\n"
+        f"  baseline lag_{r['rf_regressor']['baseline_lag']}: {_fmt(r['rf_regressor']['baseline_naive'])}\n"
         f"Classifier: {_fmt(r['rf_classifier']['metrics'])}\n"
         f"KMeans k={r['kmeans']['k']}: {_fmt(r['kmeans']['metrics'])}\n"
         f"Đã lưu {len(r['figures'])} biểu đồ + eval_report.json vào "

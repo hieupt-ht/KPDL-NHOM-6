@@ -1,16 +1,17 @@
-"""Các tác vụ dự báo ngày mai bằng mô hình Random Forest đã huấn luyện.
+"""Các tác vụ dự báo bằng mô hình Random Forest đã huấn luyện.
 
-Luồng: Silver (metrics_hourly) -> đặc trưng ngày (features.build_features) ->
+Luồng: Silver (metrics_hourly) -> đặc trưng ngày (features.py) ->
 models/rf_regressor.joblib và rf_classifier.joblib -> upsert
 gold.forecast_continuous / gold.forecast_discrete -> nhật ký gold.service_runs.
 
-Quy ước (mặc định, nhóm chưa chốt; metric, nhãn, ngưỡng nằm trong ml_config.json):
-- Metric mục tiêu: http_traffic (DEFAULT_METRIC).
-- "Ngày mai" = ngày UTC liền sau ngày ĐẦY ĐỦ mới nhất trong Silver (bỏ ngày UTC hiện tại
-  vì chưa đủ 24 giờ), khớp cách gộp ngày của features.py khi huấn luyện.
-- Nhãn rủi ro: "Cao" nếu P(High) >= RISK_PROBA_CUTOFF, ngược lại "Thấp". Ngưỡng High do
-  classifier học từ percentile của tập train (bundle["risk_threshold"]).
-- Mỗi lần chạy upsert đúng 1 dòng/bảng theo target_date nên chạy lặp 5 phút/lần vẫn idempotent.
+Quy ước (ml_config.json, Issue #13):
+- Hồi quy: trung bình ngày của metric đích (http_traffic). Phân loại: "Cao" nếu P(High) >= proba_cutoff,
+  High = trung bình ngày của metric rủi ro (l7_attack) > percentile của tập train (bundle["risk_threshold"]).
+- Ngày tính theo giờ VN, ngày chỉ hợp lệ khi đủ 24 mốc giờ (features.daily_agg).
+- Ngày dự báo (target_date) = ngày đủ dữ liệu mới nhất + horizon_days (mặc định 2), tức ngày mai
+  khi hôm qua đã đủ dữ liệu. Mô hình được huấn luyện đúng horizon này nên không dùng dữ liệu chưa đủ ngày.
+  Khi Silver chậm, target_date lùi tương ứng (ví dụ hôm nay) và dòng cũ được giữ.
+- Upsert theo target_date: dự báo các ngày khác được giữ, chạy lặp 5 phút/lần vẫn idempotent.
 """
 
 from __future__ import annotations
@@ -22,11 +23,10 @@ from pathlib import Path
 from typing import Any
 
 import joblib
-import numpy as np
 import pandas as pd
 
-from features import DEFAULT_METRIC, build_features, load_hourly
-from ml_config import LABEL_HIGH, LABEL_LOW, RISK_PROBA_CUTOFF
+from features import DEFAULT_METRIC, daily_agg, feature_frame, load_hourly
+from ml_config import HORIZON, LABEL_HIGH, LABEL_LOW, RISK_METRIC, RISK_PROBA_CUTOFF
 
 log = logging.getLogger("prediction")
 
@@ -41,7 +41,13 @@ def load_bundle(filename: str, models_dir: Path | str | None = None) -> dict[str
     path = Path(models_dir or MODELS_DIR) / filename
     if not path.is_file():
         raise FileNotFoundError(f"Chưa có mô hình {path}. Chạy training/train_models.py trước.")
-    return joblib.load(path)
+    bundle = joblib.load(path)
+    if bundle.get("horizon_days") != HORIZON:
+        raise ValueError(
+            f"{path.name} huấn luyện với horizon_days={bundle.get('horizon_days')}, cấu hình hiện tại là {HORIZON}. "
+            "Chạy lại training/train_models.py."
+        )
+    return bundle
 
 
 def model_name(bundle: dict[str, Any], stem: str) -> str:
@@ -49,31 +55,26 @@ def model_name(bundle: dict[str, Any], stem: str) -> str:
     return f"{stem}/{bundle.get('data_source', '?')}/{bundle.get('trained_at', '?')}"[:128]
 
 
-def build_target_row(hourly: pd.DataFrame, features: list[str], now: pd.Timestamp | None = None) -> tuple[date, pd.DataFrame] | None:
-    """Đặc trưng cho ngày mai (1 dòng). Trả về None nếu thiếu dữ liệu lịch sử.
+def build_target_row(hourly: pd.DataFrame, risk_hourly: pd.DataFrame, features: list[str]) -> tuple[date, pd.DataFrame] | None:
+    """Đặc trưng cho ngày dự báo (1 dòng). Trả về None nếu thiếu dữ liệu lịch sử.
 
-    Chèn một mốc giờ giá trị NaN vào ngày mục tiêu rồi dùng build_features(dropna=False):
-    lag và trung bình trượt chỉ lấy các ngày trước đó, không rò rỉ giá trị ngày mục tiêu.
+    Ngày dự báo = ngày đủ 24 giờ mới nhất của metric đích + HORIZON. Lag và trung bình trượt chỉ lấy
+    các ngày <= ngày đủ cuối, nên không cần giá trị của ngày hôm nay (chưa đủ giờ).
     """
-    if hourly.empty:
+    daily = daily_agg(hourly)
+    valid = daily.dropna()
+    if valid.empty:
         return None
-    now = pd.Timestamp.now(tz="UTC") if now is None else pd.Timestamp(now).tz_convert("UTC")
-    ts = pd.to_datetime(hourly["ts"], utc=True)
-    complete = hourly.loc[ts < now.floor("D")]
-    if complete.empty:
-        return None
-    last_day = pd.to_datetime(complete["ts"], utc=True).max().floor("D")
-    target = last_day + pd.Timedelta(days=1)
-    placeholder = pd.DataFrame({"ts": [target], "value": [np.nan]})
-    daily = build_features(pd.concat([complete[["ts", "value"]], placeholder], ignore_index=True), dropna=False)
-    row = daily.loc[[target], features]
+    target = valid.index[-1] + pd.Timedelta(days=HORIZON)
+    frame = feature_frame(daily, daily_agg(risk_hourly), upto=target)
+    row = frame.loc[[target], features]
     if row.isna().any(axis=None):
         return None
     return target.date(), row
 
 
 def predict_continuous(row: pd.DataFrame, target_date: date, bundle: dict[str, Any], mart_conn) -> float:
-    """Dự báo chỉ số lưu lượng ngày mai và upsert gold.forecast_continuous."""
+    """Dự báo chỉ số lưu lượng của ngày đích và upsert gold.forecast_continuous."""
     value = float(bundle["model"].predict(row[list(bundle["features"])])[0])
     mart_conn.execute(
         "INSERT INTO gold.forecast_continuous (target_date, predicted_value, model_name, created_at) "
@@ -86,7 +87,7 @@ def predict_continuous(row: pd.DataFrame, target_date: date, bundle: dict[str, A
 
 
 def predict_discrete(row: pd.DataFrame, target_date: date, bundle: dict[str, Any], mart_conn) -> tuple[str, float]:
-    """Phân loại rủi ro ngày mai (Cao/Thấp) và upsert gold.forecast_discrete."""
+    """Phân loại rủi ro của ngày đích (Cao/Thấp) và upsert gold.forecast_discrete."""
     model = bundle["model"]
     proba = model.predict_proba(row[list(bundle["features"])])[0]
     classes = list(model.classes_)
@@ -119,29 +120,24 @@ def _finish_run(mart_conn, run_id: int, status: str, error: str | None) -> None:
     mart_conn.commit()
 
 
-def run_prediction(
-    warehouse_conn,
-    mart_conn,
-    models_dir: Path | str | None = None,
-    metric: str = DEFAULT_METRIC,
-    now: pd.Timestamp | None = None,
-) -> int:
+def run_prediction(warehouse_conn, mart_conn, models_dir: Path | str | None = None) -> int:
     """Chạy một lượt dự báo, ghi service_runs. Trả về số dự báo đã ghi (0 nếu thiếu dữ liệu)."""
     run_id = _start_run(mart_conn)
     try:
         reg = load_bundle(REGRESSOR_FILE, models_dir)
         clf = load_bundle(CLASSIFIER_FILE, models_dir)
+        metric, risk_metric = reg.get("metric", DEFAULT_METRIC), clf.get("risk_metric", RISK_METRIC)
         features = list(dict.fromkeys([*reg["features"], *clf["features"]]))
-        target = build_target_row(load_hourly(warehouse_conn, metric), features, now)
+        target = build_target_row(load_hourly(warehouse_conn, metric), load_hourly(warehouse_conn, risk_metric), features)
         if target is None:
-            log.warning("Chưa đủ dữ liệu Silver (cần ≥ 7 ngày liên tục) để dự báo metric=%s", metric)
+            log.warning("Chưa đủ dữ liệu Silver (metric=%s, rủi ro=%s) để dự báo", metric, risk_metric)
             n = 0
         else:
             target_date, row = target
             value = predict_continuous(row, target_date, reg, mart_conn)
             label, p_high = predict_discrete(row, target_date, clf, mart_conn)
             n = 2
-            log.info("Dự báo %s (metric=%s): %.3f, rủi ro %s (P=%.2f)", target_date, metric, value, label, p_high)
+            log.info("Dự báo %s (metric=%s): %.3f, rủi ro %s=%s (P=%.2f)", target_date, metric, value, risk_metric, label, p_high)
         mart_conn.commit()
     except Exception as exc:
         mart_conn.rollback()

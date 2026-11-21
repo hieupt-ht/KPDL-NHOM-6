@@ -51,10 +51,19 @@ def test_risk_label():
 
 
 def test_uses_ml_config(evaluated):
-    from ml_config import CLUSTER_NAMES, METRIC, RISK_PROBA_CUTOFF
+    from ml_config import CLUSTER_NAMES, HORIZON, METRIC, RISK_METRIC, RISK_PROBA_CUTOFF
 
     r = evaluated[1]
-    assert r["metric"] == METRIC and r["rf_classifier"]["proba_cutoff"] == RISK_PROBA_CUTOFF
-    k = r["kmeans"]["k"]
-    names = set(CLUSTER_NAMES.get(k, [])) or set(r["kmeans"]["cluster_sizes"])
-    assert set(r["kmeans"]["cluster_sizes"]) <= names
+    assert (r["metric"], r["risk_metric"], r["horizon_days"]) == (METRIC, RISK_METRIC, HORIZON)
+    assert r["rf_classifier"]["proba_cutoff"] == RISK_PROBA_CUTOFF and r["rf_classifier"]["risk_metric"] == RISK_METRIC
+    assert r["rf_regressor"]["baseline_lag"] == 2
+    assert set(r["kmeans"]["cluster_sizes"]) <= set(CLUSTER_NAMES.values())
+
+
+def test_cluster_labels_match_clustering_service(evaluated):
+    import joblib
+
+    from evaluate_models import cluster_labels
+
+    bundle = joblib.load(evaluated[0] / "kmeans.joblib")
+    assert sorted(cluster_labels(bundle).values()) == sorted(["Bình thường", "Cao điểm", "Bất thường"])
