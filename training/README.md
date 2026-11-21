@@ -63,7 +63,7 @@ Chia train/test **theo thời gian** (80% đầu train, 20% cuối test), không
 | File | Mô hình | Đầu vào | Đầu ra |
 | :--- | :--- | :--- | :--- |
 | `kmeans.joblib` | `StandardScaler` + `KMeans` (k = 3) | `http_mean`, `l7_max`, `bot_mean` | `cluster_id` |
-| `rf_regressor.joblib` | `RandomForestRegressor` (300 cây) | `lag_2, lag_7, roll_mean_3, roll_mean_7, dow` | **chênh lệch** `value − lag_2` (cộng lại `lag_2` khi dự báo; `training.regressor_target`: `delta`/`level`) → trung bình `http_traffic` của ngày đích |
+| `rf_regressor.joblib` | `RandomForestRegressor` (300 cây, `min_samples_leaf` chọn trong `training.rf_min_samples_leaf_grid` theo MAE trên `val_ratio` cuối tập train) | `lag_2, lag_7, roll_mean_3, roll_mean_7, dow` | **chênh lệch** `value − lag_2` (cộng lại `lag_2` khi dự báo; `training.regressor_target`: `delta`/`level`) → trung bình `http_traffic` của ngày đích |
 | `rf_classifier.joblib` | `RandomForestClassifier` (300 cây, `class_weight=balanced`) | đặc trưng hồi quy + 4 đặc trưng `risk_*` | P(High); High = trung bình ngày `l7_attack` > percentile của train |
 
 Mỗi `.joblib` là dict `{"model", "features", ...metadata}`: `features` là **thứ tự cột** service phải dùng; metadata gồm `data_source` (`silver`/`demo`), `metric`, `risk_metric`, `horizon_days`, `timezone`, `trained_at`, `n_days`, `train_range`, `test_range`. Classifier có thêm `risk_threshold`, `risk_percentile`. Service từ chối nạp mô hình có `horizon_days` khác cấu hình (phải train lại).

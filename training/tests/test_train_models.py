@@ -6,6 +6,7 @@ import joblib
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import ml_config as tm_config  # noqa: E402
 from train_models import CLASSIFIER_FEATURES, FEATURES, build_cluster_features, make_demo_data, train_models  # noqa: E402
 
 
@@ -47,6 +48,15 @@ def test_regressor_is_delta_vs_smallest_lag(report):
     out, r = report
     reg = joblib.load(out / "rf_regressor.joblib")
     assert reg["base_feature"] == "lag_2" and r["rf_regressor"]["target"] == "delta"
+
+
+def test_leaf_chosen_from_grid_on_train_tail(report):
+    out, r = report
+    reg = joblib.load(out / "rf_regressor.joblib")
+    m = r["rf_regressor"]
+    assert m["min_samples_leaf"] == reg["min_samples_leaf"] and m["min_samples_leaf"] in tm_config.RF_LEAF_GRID
+    assert set(m["val_mae_by_leaf"]) <= set(tm_config.RF_LEAF_GRID)
+    assert m["min_samples_leaf"] == min(m["val_mae_by_leaf"], key=m["val_mae_by_leaf"].get)
 
 
 def test_metadata_records_metric_horizon_and_timezone(report):

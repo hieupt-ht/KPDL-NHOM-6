@@ -33,6 +33,8 @@ def test_decided_values_from_issue_13():
     [
         {"features.lags": [1, 7]},  # lag < horizon: rò rỉ dữ liệu chưa biết
         {"training.regressor_target": "abs"},
+        {"training.rf_min_samples_leaf_grid": []},
+        {"training.val_ratio": 1},
         {"risk.percentile": 100},
         {"risk.proba_cutoff": 0},
         {"cluster.roles": {"traffic": "nope", "attack": ["l7_max"]}},

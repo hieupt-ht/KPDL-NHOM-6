@@ -32,6 +32,11 @@ def _validate(cfg: dict[str, Any]) -> None:
         raise ValueError("horizon_days và min_hours_per_day phải >= 1")
     if cfg["training"]["regressor_target"] not in ("delta", "level"):
         raise ValueError("training.regressor_target chỉ nhận delta hoặc level")
+    tr = cfg["training"]
+    if not tr["rf_min_samples_leaf_grid"] or min(tr["rf_min_samples_leaf_grid"]) < 1:
+        raise ValueError("training.rf_min_samples_leaf_grid phải là danh sách số nguyên >= 1")
+    if not 0 < tr["val_ratio"] < 1:
+        raise ValueError("training.val_ratio phải trong (0, 1)")
     if not 0 < cfg["risk"]["percentile"] < 100:
         raise ValueError("risk.percentile phải trong (0, 100)")
     if not 0 < cfg["risk"]["proba_cutoff"] < 1:
@@ -83,6 +88,9 @@ TEST_RATIO: float = TRAINING["test_ratio"]
 MIN_DAYS: int = TRAINING["min_days"]
 SEED: int = TRAINING["seed"]
 RF_ESTIMATORS: int = TRAINING["rf_estimators"]
+# Chuỗi ngày gần phẳng thì RF lá nhỏ học nhiễu: chọn min_samples_leaf theo MAE trên đoạn cuối của tập train.
+RF_LEAF_GRID: list[int] = list(TRAINING["rf_min_samples_leaf_grid"])
+VAL_RATIO: float = TRAINING["val_ratio"]
 # "delta": bộ hồi quy dự báo (value - lag nhỏ nhất) rồi cộng lại lag đó, để không bị kẹt trong khoảng giá trị
 # đã thấy lúc train khi mức trung bình trôi (Random Forest không ngoại suy). "level": dự báo thẳng value.
 REGRESSOR_TARGET: str = TRAINING["regressor_target"]
