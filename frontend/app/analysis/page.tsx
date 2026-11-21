@@ -1,6 +1,6 @@
 "use client";
-import { vietnamDay } from "@/lib/date-utils";
 import { alignTrendSeries, analysisHistogramMetrics } from "@/lib/analysis-series";
+import { trafficBotScatter } from "@/lib/traffic-bot-scatter";
 import { useState } from "react";
 import useSWR from "swr";
 import type { EChartsOption } from "echarts";
@@ -30,12 +30,10 @@ export default function AnalysisPage() {
   const clusters = useSWR(["analysis-clusters", range], () => getClusters(range), { refreshInterval });
   const c = colors();
   const color = filters.metric === "l7_attack" ? c.l7 : filters.metric === "bot_share" ? c.bot : filters.metric === "human_share" ? c.human : filters.metric === "netflows" ? c.netflow : c.http;
-  const dayMap = new Map(clusters.data?.map(row => [row.date, row.cluster_name]));
-  const botMap = new Map(bot.data?.map(row => [row.ts, row.mean]));
-  const scatterGroups = ["Bình thường", "Cao điểm", "Bất thường", "Chưa phân cụm"].map(name => ({ name, type: "scatter" as const, symbolSize: 10,
+  const scatter = trafficBotScatter(scatterTraffic, bot, clusters);
+  const scatterGroups = scatter.groups.map(({ name, data }) => ({ name, data, type: "scatter" as const, symbolSize: 10,
     itemStyle: { color: name === "Bất thường" ? c.l7 : name === "Cao điểm" ? c.bot : name === "Bình thường" ? c.human : "#94A3B8" },
-    data: scatterTraffic.data?.filter(point => (dayMap.get(vietnamDay(point.ts)) ?? "Chưa phân cụm") === name && point.mean != null && botMap.get(point.ts) != null)
-      .map(point => [point.mean!, botMap.get(point.ts)!]) ?? [] }));
+  }));
   const timeOption: EChartsOption = chartBase({
     xAxis: { type: "category", data: time.data?.map(p => dateLabel(p.ts)) ?? [] },
     yAxis: { type: "value", min: 0, name: metricUnit(filters.metric) },
@@ -77,7 +75,7 @@ export default function AnalysisPage() {
       <Panel title="02 · Phân phối giá trị" subtitle="Histogram · 20 khoảng giá trị">{histogramAvailable ? <DataState loading={hist.isLoading} error={hist.error} empty={!hist.data?.length}><DataChart option={histOption}/></DataState> : <div className="empty-state" role="status"><strong>Chưa hỗ trợ histogram cho chỉ số này</strong><small>Analysis hiện cung cấp histogram cho HTTP, L7 và Bot. Các biểu đồ khác vẫn dùng chỉ số đang chọn.</small></div>}</Panel>
       <Panel title="03 · Xu hướng" subtitle={`Đường trend theo ${trendGranularity === "week" ? "tuần" : "tháng"}`}><DataState loading={trend.isLoading || trendMean.isLoading} error={trend.error || trendMean.error} empty={!trend.data?.length}><DataChart option={trendOption}/></DataState></Panel>
       <Panel title="04 · Mùa vụ" subtitle="Trung bình theo giờ, thứ hoặc tháng" action={<select className="input" aria-label="Chu kỳ mùa vụ" value={period} onChange={e => setPeriod(e.target.value as typeof period)}><option value="hour_of_day">Theo giờ</option><option value="day_of_week">Theo thứ</option><option value="month">Theo tháng</option></select>}><DataState loading={seasonal.isLoading} error={seasonal.error} empty={!seasonal.data?.length}><DataChart option={seasonalOption}/></DataState></Panel>
-      <Panel title="05 · Lưu lượng và tỷ lệ bot" subtitle="Scatter · màu theo cụm từng ngày · có zoom"><DataState loading={scatterTraffic.isLoading || bot.isLoading || clusters.isLoading} error={scatterTraffic.error || bot.error || clusters.error} empty={!scatterTraffic.data?.length || !bot.data?.length || !clusters.data?.length}><DataChart option={scatterOption}/></DataState></Panel>
+      <Panel title="05 · Lưu lượng và tỷ lệ bot" subtitle="Scatter · HTTP trung bình × Bot (%) theo ngày · có zoom"><DataState loading={scatter.loading} error={scatter.error} empty={scatter.empty}><DataChart option={scatterOption}/><p className="panel-subtitle" role="status">{scatter.pointCount} ngày có đủ dữ liệu HTTP và Bot. {scatter.clusterStatus === "loading" ? "Đang tải nhãn ML; các điểm tạm hiển thị màu xám." : scatter.clusterStatus === "unavailable" ? "Chưa tải được nhãn ML; dữ liệu HTTP–Bot vẫn hiển thị." : scatter.clusterStatus === "missing" ? "Chưa có kết quả phân cụm ML; các điểm hiển thị màu xám." : "Màu theo nhãn ML; màu xám là ngày chưa có nhãn hoặc nhãn chưa có quy ước."}</p></DataState></Panel>
       <Panel title="06 · Tương quan Pearson" subtitle="Hệ số trong khoảng −1 đến 1"><DataState loading={correlation.isLoading} error={correlation.error} empty={!correlation.data?.length}><DataChart option={heatOption}/></DataState></Panel>
     </div><div style={{ marginTop: 15 }}><SourceNote /></div>
   </>;

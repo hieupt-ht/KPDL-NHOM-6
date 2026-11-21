@@ -31,6 +31,7 @@ Route `/admin` có kiểm tra server; Viewer bị chuyển về tổng quan, kh�
 
 - Lọc ngày chuyển sang nửa đêm Việt Nam `+07:00`, ngày kết thúc bao gồm cả ngày đã chọn qua cận trên ngày kế tiếp. Ghép ngày UTC với ngày cụm theo múi giờ Việt Nam.
 - Timeseries/clusters tải các trang theo `X-Total-Count`; giữ số đo null và giá trị lớn hơn 1. HTTP 404 là trạng thái chưa có dữ liệu.
+- Scatter HTTP–Bot chỉ cần hai chuỗi số đo theo ngày. Ghép theo cùng instant, tô màu theo nhãn ML của ngày Việt Nam khi có; thiếu nhãn hoặc clusters trả 404/503 vẫn vẽ điểm màu xám và thông báo rõ. Nhãn chưa có quy ước không bị suy diễn thành Bất thường. Chỉ khi thiếu cặp HTTP/Bot hợp lệ mới hiển thị empty; lỗi hai nguồn chính vẫn hiển thị error.
 - Histogram/seasonal/correlation là snapshot toàn bộ kết quả hiện tại, không nhận start/end. UI có ghi rõ phạm vi; status cũng không nhận bộ lọc ngày.
 - POST jobs trả 202 chỉ xác nhận tiếp nhận. Admin theo dõi `/api/jobs/runs/{run_id}` đến trạng thái cuối, kể cả failed/partial/skipped. Dừng theo dõi không hủy job. Không tự retry POST khi timeout vì job có thể đã bắt đầu.
 - Không thay đổi schema Gold hoặc nghiệp vụ Analysis/ML. Task chưa triển khai vẫn báo failed; trang dữ liệu trống không chứng minh pipeline đã hoàn tất.
