@@ -16,12 +16,11 @@ from pathlib import Path
 from typing import Any
 
 import joblib
-import numpy as np
 import pandas as pd
 from psycopg.types.json import Jsonb
 
 from features import DEFAULT_METRIC, build_cluster_features, load_cluster_hourly
-from ml_config import CLUSTER_ATTACK, CLUSTER_FALLBACK_NAME, CLUSTER_NAMES, CLUSTER_TRAFFIC
+from ml_config import name_clusters
 
 log = logging.getLogger("clustering")
 
@@ -44,25 +43,9 @@ def build_daily_features(conn) -> pd.DataFrame:
 
 
 def cluster_names(bundle: dict[str, Any]) -> dict[int, str]:
-    """Ánh xạ cluster_id -> tên theo tâm cụm (không gian đã chuẩn hóa).
-
-    k = 2: Bất thường (tấn công/bot cao nhất) và Bình thường. k = 3: thêm Cao điểm (traffic cao hơn
-    trong hai cụm còn lại). k khác: tên dự phòng "Cụm n" xếp theo traffic tăng dần.
-    """
-    feats = list(bundle["features"])
-    centers = np.asarray(bundle["model"][-1].cluster_centers_)  # đã chuẩn hóa vì StandardScaler đứng trước
-    traffic = centers[:, feats.index(CLUSTER_TRAFFIC)]
-    attack = centers[:, [feats.index(c) for c in CLUSTER_ATTACK]].max(axis=1)
-    k = len(centers)
-    if k in (2, 3):
-        anomaly = int(np.argmax(attack))
-        rest = sorted((c for c in range(k) if c != anomaly), key=lambda c: traffic[c])
-        names = {anomaly: CLUSTER_NAMES["anomaly"], rest[0]: CLUSTER_NAMES["normal"]}
-        if k == 3:
-            names[rest[1]] = CLUSTER_NAMES["peak"]
-        return names
-    order = np.argsort(traffic)
-    return {int(cid): CLUSTER_FALLBACK_NAME.format(n=r + 1) for r, cid in enumerate(order)}
+    """Ánh xạ cluster_id -> tên theo tâm cụm (ml_config.name_clusters)."""
+    # Tâm cụm đã chuẩn hóa vì StandardScaler đứng trước KMeans trong pipeline.
+    return name_clusters(bundle["model"][-1].cluster_centers_, list(bundle["features"]))
 
 
 def assign_clusters(features: pd.DataFrame, bundle: dict[str, Any], mart_conn, metric: str = DEFAULT_METRIC) -> int:

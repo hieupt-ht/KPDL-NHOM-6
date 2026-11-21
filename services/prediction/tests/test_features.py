@@ -90,3 +90,41 @@ def test_load_hourly_reads_only_radar_source():
     df = load_hourly(conn, "l7_attack")
     assert "silver.metrics_hourly" in conn.sql and "COALESCE(source, 'radar') = 'radar'" in conn.sql
     assert conn.params == ("l7_attack",) and list(df.columns) == ["ts", "value"] and len(df) == 1
+
+
+# ---- Edge case: múi giờ, kiểu dữ liệu, thứ tự đầu vào ----
+
+
+def test_single_day_has_no_complete_row():
+    assert build_features(vn_hourly(1)).empty
+    assert len(build_features(vn_hourly(1), dropna=False)) == 1
+
+
+def test_non_vietnam_timestamps_grouped_by_vietnam_day():
+    # 23:00 giờ -05:00 ngày 01-01 = 04:00 UTC ngày 01-02 = 11:00 giờ VN ngày 01-02.
+    ts = pd.DatetimeIndex(["2026-01-01 23:00-05:00"])
+    df = build_features(pd.DataFrame({"ts": ts, "value": [5.0]}), dropna=False)
+    assert list(df.index.strftime("%Y-%m-%d")) == ["2026-01-02"]
+
+
+def test_naive_timestamps_treated_as_utc():
+    h = vn_hourly(14)
+    naive = h.assign(ts=h["ts"].dt.tz_localize(None))
+    pd.testing.assert_frame_equal(build_features(naive), build_features(h))
+
+
+def test_integer_values_and_unsorted_input():
+    h = vn_hourly(14).assign(value=lambda d: d["value"].astype(int)).sample(frac=1, random_state=0)
+    pd.testing.assert_frame_equal(build_features(h), build_features(vn_hourly(14)))
+
+
+def test_load_hourly_empty_result():
+    class Conn:
+        def execute(self, sql, params=None):
+            return self
+
+        def fetchall(self):
+            return []
+
+    df = load_hourly(Conn(), "l7_attack")
+    assert list(df.columns) == ["ts", "value"] and df.empty

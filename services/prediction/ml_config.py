@@ -81,3 +81,27 @@ TEST_RATIO: float = TRAINING["test_ratio"]
 MIN_DAYS: int = TRAINING["min_days"]
 SEED: int = TRAINING["seed"]
 RF_ESTIMATORS: int = TRAINING["rf_estimators"]
+
+
+def name_clusters(centers, features: list[str]) -> dict[int, str]:
+    """Tên cụm theo tâm cụm (không gian đã chuẩn hóa; cột theo `features`), README 5.2.
+
+    k = 2: Bất thường (tấn công/bot cao nhất) và Bình thường. k = 3: thêm Cao điểm (traffic cao hơn
+    trong hai cụm còn lại). k khác: tên dự phòng "Cụm n" xếp theo traffic tăng dần.
+    Dùng chung cho services/clustering và training/evaluate_models.py.
+    """
+    import numpy as np
+
+    centers = np.asarray(centers, dtype=float)
+    traffic = centers[:, features.index(CLUSTER_TRAFFIC)]
+    attack = centers[:, [features.index(c) for c in CLUSTER_ATTACK]].max(axis=1)
+    k = len(centers)
+    if k in (2, 3):
+        anomaly = int(np.argmax(attack))
+        rest = sorted((c for c in range(k) if c != anomaly), key=lambda c: traffic[c])
+        names = {anomaly: CLUSTER_NAMES["anomaly"], rest[0]: CLUSTER_NAMES["normal"]}
+        if k == 3:
+            names[rest[1]] = CLUSTER_NAMES["peak"]
+        return names
+    order = np.argsort(traffic)
+    return {int(cid): CLUSTER_FALLBACK_NAME.format(n=r + 1) for r, cid in enumerate(order)}
