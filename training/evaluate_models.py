@@ -1,7 +1,7 @@
 """Đánh giá 3 mô hình đã huấn luyện (chạy ngay sau train_models.py).
 
 Chạy từ thư mục gốc repo:
-    python training/evaluate_models.py                # Silver qua WAREHOUSE_DSN (rơi về demo nếu thiếu dữ liệu)
+    python training/evaluate_models.py                # Silver qua WAREHOUSE_DSN; thiếu dữ liệu thì dừng
     python training/evaluate_models.py --demo
     python training/evaluate_models.py --metric http_traffic --risk-metric l7_attack
 
@@ -181,6 +181,11 @@ def eval_classifier(bundle: dict, test: pd.DataFrame, out_dir: Path) -> tuple[di
         "test_high_ratio": float(y.mean()),
         "n_test": len(y),
         "metrics": {k: _safe(f, y, pred, proba) for k, f in CLASSIFICATION_METRICS.items()},
+        "baselines": {
+            name: {k: _safe(f, y, np.full(len(y), label), np.full(len(y), float(label)))
+                   for k, f in CLASSIFICATION_METRICS.items()}
+            for name, label in (("always_low", 0), ("always_high", 1))
+        },
     }
     figs = []
     fig, ax = plt.subplots(figsize=(4.5, 4))

@@ -63,6 +63,7 @@ from ml_config import (  # noqa: E402
     RISK_METRIC,
     RISK_PERCENTILE,
     RISK_LABEL_MODE,
+    RISK_ROLLING_DAYS,
     RISK_PROBA_CUTOFF,
     RISK_TUNE_CUTOFF,
     SEED,
@@ -248,6 +249,8 @@ def train_classifier(train: pd.DataFrame, test: pd.DataFrame, percentile: float,
     `risk_threshold` ghi lại ngưỡng train (mode train) hoặc trung vị risk_ref trên train (mode rolling, để tham khảo).
     """
     if RISK_LABEL_MODE == "rolling":
+        if percentile != RISK_PERCENTILE:
+            raise ValueError("Nhãn rolling dùng percentile trong ml_config.json để khớp risk_ref; sửa config rồi train lại.")
         threshold = float(train["risk_ref"].median())
         y_train = (train["risk_value"] > train["risk_ref"]).astype(int)
         y_test = (test["risk_value"] > test["risk_ref"]).astype(int)
@@ -262,6 +265,7 @@ def train_classifier(train: pd.DataFrame, test: pd.DataFrame, percentile: float,
         "risk_metric": risk_metric,
         "risk_percentile": percentile,
         "risk_label_mode": RISK_LABEL_MODE,
+        "risk_rolling_days": RISK_ROLLING_DAYS if RISK_LABEL_MODE == "rolling" else None,
         "risk_threshold": threshold,
         "proba_cutoff": cutoff,
         "val_f1_by_cutoff": val_f1,
@@ -279,6 +283,7 @@ def train_classifier(train: pd.DataFrame, test: pd.DataFrame, percentile: float,
         "risk_threshold": threshold,
         "risk_percentile": percentile,
         "risk_label_mode": RISK_LABEL_MODE,
+        "risk_rolling_days": RISK_ROLLING_DAYS if RISK_LABEL_MODE == "rolling" else None,
         "proba_cutoff": cutoff,
     }
     return bundle, metrics

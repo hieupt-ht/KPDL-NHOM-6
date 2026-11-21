@@ -188,6 +188,19 @@ def test_model_trained_with_other_horizon_is_rejected(models, tmp_path):
         pt.load_bundle(pt.REGRESSOR_FILE, tmp_path)
 
 
+@pytest.mark.parametrize("field,value", [
+    ("risk_label_mode", "train"),
+    ("risk_rolling_days", 56),
+    ("risk_percentile", 90),
+    ("timezone", "UTC"),
+])
+def test_incompatible_risk_definition_is_rejected(models, tmp_path, field, value):
+    bundle = joblib.load(models / pt.CLASSIFIER_FILE)
+    joblib.dump({**bundle, field: value}, tmp_path / pt.CLASSIFIER_FILE)
+    with pytest.raises(ValueError, match="train lại"):
+        pt.load_bundle(pt.CLASSIFIER_FILE, tmp_path)
+
+
 def test_run_prediction_success_and_idempotent(models):
     wh, mart = FakeWarehouse(_data(60)), FakeMart()
     assert pt.run_prediction(wh, mart, models) == 2
@@ -363,4 +376,3 @@ def test_run_prediction_missing_classifier_only(models, tmp_path):
     with pytest.raises(FileNotFoundError, match="rf_classifier"):
         pt.run_prediction(FakeWarehouse(_data(30)), mart, tmp_path)
     assert not mart.cont and not mart.runs and mart.rollbacks == 1
-

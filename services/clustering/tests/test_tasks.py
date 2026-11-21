@@ -279,4 +279,3 @@ def test_run_clustering_leaves_long_error_for_runner(env):
     with pytest.raises(RuntimeError):
         ct.run_clustering(FakeWarehouse(env[1]), mart, env[0])
     assert not mart.runs and mart.rollbacks == 1
-

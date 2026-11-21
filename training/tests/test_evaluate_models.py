@@ -32,6 +32,14 @@ def test_matches_training_metrics(evaluated):
     assert r["kmeans"]["metrics"]["silhouette"] == pytest.approx(saved["kmeans"]["silhouette"])
 
 
+def test_classifier_reports_constant_baselines_on_same_test_set(evaluated):
+    clf = evaluated[1]["rf_classifier"]
+    share = clf["test_high_ratio"]
+    assert clf["baselines"]["always_low"]["accuracy"] == pytest.approx(1 - share)
+    assert clf["baselines"]["always_low"]["f1"] == 0
+    assert clf["baselines"]["always_high"]["f1"] == pytest.approx(2 * share / (1 + share))
+
+
 def test_figures_written(evaluated):
     out, r = evaluated
     assert len(r["figures"]) >= 7

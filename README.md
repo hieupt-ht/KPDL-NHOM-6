@@ -291,6 +291,8 @@ Các service chỉ **nạp mô hình đã huấn luyện sẵn** từ `models/` 
 
 > **Chạy 5 phút/lần nhưng dự báo "ngày mai":** mỗi lần chạy, service lấy dữ liệu Silver mới nhất (có thể Cloudflare vừa điều chỉnh) để cập nhật đặc trưng. Kết quả chỉ đổi khi dữ liệu đầu vào đổi. Service không huấn luyện lại.
 
+**Đề xuất đang kiểm chứng ở Issue #29:** nhánh tích hợp dùng nhãn Cao khi L7 ngày đích vượt p75 của 28 ngày đã biết trước D−2 (khởi động khi có ít nhất 14 ngày hợp lệ), thay định nghĩa cố định trong bảng trên. Cấu hình có thể chọn `risk.label_mode=train` hoặc `rolling`; cần nhóm xác nhận trước triển khai. Cutoff P(Cao) được chọn trên validation và lưu theo mô hình, không mặc định luôn là 0.5.
+
 Ngày đặc trưng theo `Asia/Ho_Chi_Minh`, chỉ nhận ngày đủ 24 giờ hợp lệ. Ngày đích = ngày đầy đủ cuối + 2; nếu Silver trễ thì ngày đích cũng lùi, API mặc định ngày mai có thể trả 404. Không đổi nhãn ngày chỉ để làm đầy biểu đồ. Xem [quy ước ML](training/README.md).
 
 ### 5.4. Huấn luyện offline

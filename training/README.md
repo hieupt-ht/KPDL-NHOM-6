@@ -37,6 +37,8 @@ Phân cụm dùng đặc trưng riêng theo ngày VN (README gốc 5.2): `http_m
 
 ## 2. Huấn luyện
 
+Nhánh tích hợp đang kiểm chứng đề xuất rolling 28 ngày của [Issue #29](https://github.com/hieupt-ht/KPDL-NHOM-6/issues/29), chưa coi là quyết định chung thay Issue #13. Cần nhóm xác nhận định nghĩa nhãn trước khi triển khai mô hình mới.
+
 ```bash
 docker compose --profile training run --rm trainer
 # Dữ liệu giả: chỉ dùng riêng khi kiểm thử, không nghiệm thu dữ liệu thật.
@@ -49,7 +51,7 @@ docker compose --profile training run --rm trainer --demo --out-dir /app/models/
 | `--risk-metric` | `l7_attack` | metric tạo nhãn rủi ro |
 | `--demo` | tắt | dùng dữ liệu giả (180 ngày, đủ 3 metric) |
 | `--k` | 3 (config) | ép số cụm; `--k` bỏ trống trong code (`k=None`) thì chọn k ∈ [2, 6] có Silhouette cao nhất |
-| `--risk-percentile` | 75 | ngưỡng "High" = percentile của tập **train** (theo thời gian) |
+| `--risk-percentile` | 75 | mode train: percentile tập train; mode rolling: phải khớp percentile trong config dùng tạo `risk_ref` |
 | `--min-days` | 30 | Silver ít hơn số ngày này thì dừng, không tự tạo mô hình demo |
 | `--out-dir` | `models/` | thư mục lưu kết quả |
 
@@ -63,7 +65,7 @@ Chia train/test **theo thời gian** (80% đầu train, 20% cuối test), không
 | `rf_regressor.joblib` | `RandomForestRegressor` (300 cây, `min_samples_leaf` chọn trong `training.rf_min_samples_leaf_grid` theo MAE trên `val_ratio` cuối tập train) | `lag_2, lag_7, roll_mean_3, roll_mean_7, dow` | **chênh lệch** `value − lag_2` (đầu vào tương đối: `lag_7`, `roll_mean_*` trừ `lag_2`, bỏ `lag_2`, giữ `dow`; cộng lại `lag_2` khi dự báo; `training.regressor_target`: `delta`/`level`) → trung bình `http_traffic` của ngày đích |
 | `rf_classifier.joblib` | `RandomForestClassifier` (300 cây, `class_weight=balanced`) | đặc trưng hồi quy + 4 đặc trưng `risk_*` | P(High); High = trung bình ngày `l7_attack` > `risk_ref` = p75 của 28 ngày đã biết trước đó (≤ ngày đích − 2; `risk.label_mode: rolling`, `rolling_days`), tức tăng đột biến so với gần đây; `label_mode: train` dùng lại p75 cố định của tập train. Đầu vào tương đối: `risk_*` trừ `risk_ref`, traffic trừ `lag_2`. Cutoff P(High) chọn theo F1 trên `val_ratio` cuối tập train (`risk.tune_cutoff`), lưu `proba_cutoff` trong bundle; service dùng cutoff này |
 
-Mỗi `.joblib` là dict `{"model", "features", ...metadata}`: `features` là **thứ tự cột** service phải dùng; metadata gồm `data_source` (`silver`/`demo`), `metric`, `risk_metric`, `horizon_days`, `timezone`, `trained_at`, `n_days`, `train_range`, `test_range`. Classifier có thêm `risk_threshold`, `risk_percentile`. Service từ chối nạp mô hình có `horizon_days` khác cấu hình (phải train lại).
+Mỗi `.joblib` là dict `{"model", "features", ...metadata}`: `features` là **thứ tự cột** service phải dùng; metadata gồm `data_source` (`silver`/`demo`), `metric`, `risk_metric`, `horizon_days`, `timezone`, `trained_at`, `n_days`, `train_range`, `test_range`. Classifier có thêm `risk_threshold`, `risk_percentile`, `risk_label_mode`, `risk_rolling_days`, `proba_cutoff`. Service từ chối mô hình khác horizon/múi giờ/định nghĩa nhãn; mode rolling phải khớp cửa sổ và percentile của `risk_ref`. Artifact cũ thiếu metadata rolling cần train lại.
 
 ### `models/metrics.json`
 
@@ -119,7 +121,7 @@ Quy ước:
 - **Ngày (`date`, `target_date`) tính theo giờ VN**, chỉ ngày đủ 24 giờ.
 - **`target_date`** = ngày đủ dữ liệu mới nhất + 2. Ví dụ chạy ngày 21/11 (VN) khi 20/11 đã đủ thì `target_date` = 22/11. Nếu Silver chậm và 20/11 chưa đủ, dòng được ghi cho 21/11. Mỗi lượt upsert 1 dòng mỗi bảng; dòng các ngày trước được giữ.
 - **`cluster_name`** theo tâm cụm (README 5.2): `Bất thường` = cụm có `l7_max` hoặc `bot_mean` cao nhất (chuẩn hóa); trong hai cụm còn lại `Cao điểm` = `http_mean` cao hơn, `Bình thường` = thấp hơn. k ≠ 2, 3 dùng `Cụm 1..k` theo traffic tăng dần.
-- **`label`** = `Cao` nếu P(High) ≥ 0.5, ngược lại `Thấp`.
+- **`label`** = `Cao` nếu P(High) ≥ cutoff của bundle, ngược lại `Thấp`; 0.5 chỉ là cấu hình khởi đầu. API/FE không tự đổi nhãn từ xác suất.
 - **`model_name`** = `<rf_regressor|rf_classifier>/<data_source>/<trained_at>`.
 - Thiếu mô hình hoặc mô hình khác `horizon_days` → lỗi (ghi `service_runs.status='failed'`). Thiếu dữ liệu → không ghi dự báo mới, runner ghi `skipped`; giữ kết quả cũ.
 
@@ -138,6 +140,14 @@ Payload mẫu cho Frontend:
 ```bash
 bash training/tests/run.sh                 # Windows: ./training/tests/run.ps1
 bash services/api/tests/run.sh all         # Windows: ./services/api/tests/run.ps1 -Mode All
+```
+
+Đánh giá offline bằng Docker (có baseline hồi quy và phân loại luôn Cao/luôn Thấp):
+
+```bash
+docker compose --profile training build trainer
+docker compose --profile training run --rm trainer --out-dir /app/models/validation/issue29
+docker compose --profile training run --rm --entrypoint python trainer training/evaluate_models.py --models-dir /app/models/validation/issue29
 ```
 
 ## 5. Lưu ý và việc còn mở

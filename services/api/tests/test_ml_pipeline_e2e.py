@@ -1,7 +1,9 @@
 """Synthetic Silver + explicitly demo-trained models: integration, not Radar/model acceptance."""
 
+import json
 import os
 import time
+from pathlib import Path
 
 import httpx
 import pytest
@@ -60,7 +62,10 @@ def test_ml_admin_jobs_write_gold_once_and_skip_empty_silver(request, mart):
             assert "/demo/" in response.json()["model_name"]
         discrete = client.get(api + "/api/forecast/discrete", params=window, headers=vh).json()
         assert 0 <= discrete["probability"] <= 1
-        assert discrete["label"] == ("Cao" if discrete["probability"] >= 0.5 else "Thấp")
+        # Cutoff is tuned offline and saved with the fixture model, not fixed at 0.5.
+        metadata = json.loads(Path("/test-models/metrics.json").read_text(encoding="utf-8"))
+        cutoff = metadata["rf_classifier"]["proba_cutoff"]
+        assert discrete["label"] == ("Cao" if discrete["probability"] >= cutoff else "Thấp")
         before = mart.execute("SELECT * FROM gold.forecast_continuous").fetchall()
         # Force the second write to fail: the continuous write must roll back too.
         mart.execute("ALTER TABLE gold.forecast_discrete ADD CONSTRAINT test_reject_prediction CHECK (false) NOT VALID")

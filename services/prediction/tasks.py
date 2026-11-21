@@ -27,7 +27,10 @@ import joblib
 import pandas as pd
 
 from features import DEFAULT_METRIC, daily_agg, feature_frame, classifier_inputs, load_hourly, regressor_inputs
-from ml_config import HORIZON, LABEL_HIGH, LABEL_LOW, RISK_METRIC, RISK_PROBA_CUTOFF
+from ml_config import (
+    HORIZON, LABEL_HIGH, LABEL_LOW, RISK_METRIC, RISK_PROBA_CUTOFF,
+    RISK_LABEL_MODE, RISK_ROLLING_DAYS, RISK_PERCENTILE, TIMEZONE,
+)
 
 log = logging.getLogger("prediction")
 
@@ -48,6 +51,16 @@ def load_bundle(filename: str, models_dir: Path | str | None = None) -> dict[str
             f"{path.name} huấn luyện với horizon_days={bundle.get('horizon_days')}, cấu hình hiện tại là {HORIZON}. "
             "Chạy lại training/train_models.py."
         )
+    if bundle.get("timezone") != TIMEZONE:
+        raise ValueError("Múi giờ mô hình khác cấu hình; cần train lại.")
+    if filename == CLASSIFIER_FILE:
+        if bundle.get("risk_label_mode", "train") != RISK_LABEL_MODE:
+            raise ValueError("risk_label_mode của mô hình khác cấu hình; cần train lại.")
+        if RISK_LABEL_MODE == "rolling" and (
+            bundle.get("risk_rolling_days") != RISK_ROLLING_DAYS
+            or bundle.get("risk_percentile") != RISK_PERCENTILE
+        ):
+            raise ValueError("Cửa sổ/percentile rolling của mô hình khác risk_ref hiện tại; cần train lại.")
     return bundle
 
 

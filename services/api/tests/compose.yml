@@ -119,6 +119,7 @@ services:
 
   tests:
     build: {context: ../../.., dockerfile: services/api/tests/Dockerfile}
+    volumes: ["ml-models:/test-models:ro"]
     environment:
       AUTH_ENABLED: "false"
       SCHEDULER_ENABLED: "false"

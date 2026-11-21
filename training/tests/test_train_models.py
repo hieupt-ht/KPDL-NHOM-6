@@ -107,3 +107,12 @@ def test_insufficient_silver_never_silently_trains_demo(monkeypatch):
     monkeypatch.setattr(tm, "load_cluster_hourly", lambda *a: tm.make_demo_data(days=5))
     with pytest.raises(SystemExit, match="Silver"):
         tm.load_data("http_traffic", "l7_attack", demo=False, min_days=30)
+
+
+def test_rolling_contract_is_saved_and_percentile_override_cannot_mislabel(report):
+    out, r = report
+    bundle = joblib.load(out / "rf_classifier.joblib")
+    assert bundle["risk_rolling_days"] == r["rf_classifier"]["risk_rolling_days"] == tm_config.RISK_ROLLING_DAYS
+    assert bundle["risk_label_mode"] == "rolling"
+    with pytest.raises(ValueError, match="ml_config"):
+        tm.train_classifier(None, None, tm_config.RISK_PERCENTILE + 1, "l7_attack")
