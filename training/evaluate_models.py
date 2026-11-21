@@ -292,7 +292,7 @@ def _fmt(d: dict) -> str:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--metric", default=None, help="mặc định: metric trong ml_config.json")
+    p.add_argument("--metric", default=METRIC, help="mặc định: metric trong ml_config.json")
     p.add_argument("--demo", action="store_true")
     p.add_argument("--min-days", type=int, default=MIN_DAYS)
     p.add_argument("--models-dir", type=Path, default=MODELS_DIR)
