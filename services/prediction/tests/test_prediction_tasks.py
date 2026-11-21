@@ -252,6 +252,19 @@ def test_target_row_feature_subset():
     assert list(row.columns) == ["lag_2"] and str(target) == "2026-04-02"
 
 
+class _ConstModel:
+    def predict(self, X):
+        return [5.0] * len(X)
+
+
+def test_predict_continuous_delta_adds_base_feature():
+    _, row = _row(_data(30))
+    bundle = {"model": _ConstModel(), "features": ["lag_2"], "base_feature": "lag_2"}
+    level = {"model": _ConstModel(), "features": ["lag_2"]}
+    assert pt.predict_continuous(row, None, level, FakeMart()) == 5.0
+    assert pt.predict_continuous(row, None, bundle, FakeMart()) == pytest.approx(5.0 + row["lag_2"].iloc[0])
+
+
 def test_predict_continuous_uses_bundle_feature_order(models):
     reg = pt.load_bundle(pt.REGRESSOR_FILE, models)
     target, row = _row(_data(60))

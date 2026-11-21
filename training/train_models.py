@@ -54,6 +54,7 @@ from ml_config import (  # noqa: E402
     LAGS,
     MIN_DAYS,
     MODEL_FEATURES as FEATURES,
+    BASE_FEATURE,
     RF_ESTIMATORS,
     RISK_METRIC,
     RISK_PERCENTILE,
@@ -162,16 +163,19 @@ def split(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 def train_regressor(train: pd.DataFrame, test: pd.DataFrame) -> tuple[dict, dict]:
     model = RandomForestRegressor(n_estimators=RF_ESTIMATORS, random_state=SEED, n_jobs=-1)
-    model.fit(train[FEATURES], train["value"])
-    pred = model.predict(test[FEATURES])
+    base_tr = train[BASE_FEATURE] if BASE_FEATURE else 0.0
+    base_te = test[BASE_FEATURE] if BASE_FEATURE else 0.0
+    model.fit(train[FEATURES], train["value"] - base_tr)  # delta: học chênh lệch so với giá trị ngày gần nhất
+    pred = model.predict(test[FEATURES]) + base_te
     metrics = {
         "mae": float(mean_absolute_error(test["value"], pred)),
         "rmse": float(np.sqrt(mean_squared_error(test["value"], pred))),
         # Mốc so sánh: đoán "giá trị ngày đích = giá trị ngày gần nhất đã biết" (lag nhỏ nhất).
         "baseline_naive_mae": float(mean_absolute_error(test["value"], test[f"lag_{min(LAGS)}"])),
         "baseline_naive_lag": min(LAGS),
+        "target": "delta" if BASE_FEATURE else "level",
     }
-    return {"model": model, "features": FEATURES}, metrics
+    return {"model": model, "features": FEATURES, "base_feature": BASE_FEATURE}, metrics
 
 
 def train_classifier(train: pd.DataFrame, test: pd.DataFrame, percentile: float, risk_metric: str) -> tuple[dict, dict]:

@@ -43,6 +43,12 @@ def test_models_predict(report):
     assert r["rf_regressor"]["baseline_naive_lag"] == 2
 
 
+def test_regressor_is_delta_vs_smallest_lag(report):
+    out, r = report
+    reg = joblib.load(out / "rf_regressor.joblib")
+    assert reg["base_feature"] == "lag_2" and r["rf_regressor"]["target"] == "delta"
+
+
 def test_metadata_records_metric_horizon_and_timezone(report):
     out, r = report
     for name in ("kmeans", "rf_regressor", "rf_classifier"):
