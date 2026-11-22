@@ -8,85 +8,14 @@ from reader import fetch_silver_metrics
 from resampling import compute_resampling_records
 from histogram import compute_histogram_records
 from trend import compute_trend_records
-from seasonal import compute_seasonal_records
-from correlation import compute_correlation_records
-from writer import (
-    write_all_analysis_results,
-    write_resampled,
-    write_histogram,
-    write_trend,
-    write_seasonal,
-    write_correlation,
+from temporal_patterns import (
+    assess_temporal_cycle_completeness,
+    compute_temporal_pattern_records,
 )
+from correlation import compute_correlation_records
+from writer import write_all_analysis_results
 
 log = logging.getLogger(__name__)
-
-
-def compute_resampled() -> None:
-    """Tổng hợp chỉ số theo ngày, tuần và tháng rồi ghi Gold."""
-    log.info("Bắt đầu tác vụ compute_resampled...")
-    df = fetch_silver_metrics()
-    if df.empty:
-        log.warning("Silver rỗng. Bỏ qua compute_resampled.")
-        return
-    records = compute_resampling_records(df)
-    if records:
-        write_resampled(records)
-        log.info("compute_resampled hoàn thành: %d bản ghi đã lưu.", len(records))
-
-
-def compute_histogram() -> None:
-    """Chia các chỉ số cần hiển thị thành 20 khoảng histogram."""
-    log.info("Bắt đầu tác vụ compute_histogram...")
-    df = fetch_silver_metrics()
-    if df.empty:
-        log.warning("Silver rỗng. Bỏ qua compute_histogram.")
-        return
-    records = compute_histogram_records(df)
-    if records:
-        write_histogram(records)
-        log.info("compute_histogram hoàn thành: %d bins đã lưu.", len(records))
-
-
-def compute_trend() -> None:
-    """Tách xu hướng của chuỗi tháng hoặc chuỗi tuần nếu thiếu dữ liệu."""
-    log.info("Bắt đầu tác vụ compute_trend...")
-    df = fetch_silver_metrics()
-    if df.empty:
-        log.warning("Silver rỗng. Bỏ qua compute_trend.")
-        return
-    records = compute_trend_records(df)
-    if records:
-        write_trend(records)
-        log.info("compute_trend hoàn thành: %d điểm trend đã lưu.", len(records))
-
-
-def compute_seasonal() -> None:
-    """Tính mùa vụ theo giờ, thứ và tháng theo giờ Việt Nam."""
-    log.info("Bắt đầu tác vụ compute_seasonal...")
-    df = fetch_silver_metrics()
-    if df.empty:
-        log.warning("Silver rỗng. Bỏ qua compute_seasonal.")
-        return
-    records = compute_seasonal_records(df)
-    if records:
-        write_seasonal(records)
-        log.info("compute_seasonal hoàn thành: %d điểm seasonal đã lưu.", len(records))
-
-
-def compute_correlation() -> None:
-    """Tính tương quan Pearson giữa năm chỉ số từ Silver."""
-    log.info("Bắt đầu tác vụ compute_correlation...")
-    df = fetch_silver_metrics()
-    if df.empty:
-        log.warning("Silver rỗng. Bỏ qua compute_correlation.")
-        return
-    records = compute_correlation_records(df)
-    if records:
-        write_correlation(records)
-        log.info(
-            "compute_correlation hoàn thành: %d cặp correlation đã lưu.", len(records)
-        )
 
 
 def run_all() -> str:
@@ -106,7 +35,7 @@ def run_all() -> str:
        - Resampling (day, week, month)
        - Histogram (20 bins)
        - Trend (seasonal_decompose)
-       - Seasonal (hour, day_of_week, month)
+       - Temporal Pattern (hour, day_of_week, month — trung bình bucket)
        - Correlation (Pearson 5x5)
     5. Kiểm tra kết quả tính toán trước khi ghi Data Mart.
     6. Ghi tất cả vào Data Mart trong MỘT Transaction duy nhất (All-or-Nothing).
@@ -151,36 +80,91 @@ def run_all() -> str:
             quality_report.issues_detected,
         )
 
-    # 3. Tính toán các thành phần phân tích
-    resampled_records = compute_resampling_records(df)
-    histogram_records = compute_histogram_records(df)
-    trend_records = compute_trend_records(df)
-    seasonal_records = compute_seasonal_records(df)
-    correlation_records = compute_correlation_records(df)
+    # 3. Tính toán các thành phần phân tích theo Quality Gate từng thuật toán.
+    # Thuật toán có algorithm_fitness = False (không đủ điều kiện đầu vào)
+    # được bỏ qua và ghi rõ lý do, không gọi compute để tránh tính thừa.
+    algorithm_fns = (
+        ("resampling", compute_resampling_records),
+        ("histogram", compute_histogram_records),
+        ("trend", compute_trend_records),
+        ("temporal_pattern", compute_temporal_pattern_records),
+        ("correlation", compute_correlation_records),
+    )
+    computed: dict[str, list] = {}
+    skipped_algorithms: list[str] = []
+    for name, fn in algorithm_fns:
+        if not quality_report.algorithm_fitness.get(name, False):
+            log.info(
+                "Bỏ qua thuật toán '%s': không đủ điều kiện đầu vào theo quality gate.",
+                name,
+            )
+            computed[name] = []
+            skipped_algorithms.append(name)
+            continue
+        computed[name] = fn(df)
+        if not computed[name]:
+            log.info(
+                "Thuật toán '%s' đủ điều kiện theo gate nhưng không tạo được bản ghi nào.",
+                name,
+            )
+
+    resampled_records = computed["resampling"]
+    histogram_records = computed["histogram"]
+    trend_records = computed["trend"]
+    temporal_pattern_records = computed["temporal_pattern"]
+    correlation_records = computed["correlation"]
 
     all_computed = [
         resampled_records,
         histogram_records,
         trend_records,
-        seasonal_records,
+        temporal_pattern_records,
         correlation_records,
     ]
     if not any(all_computed):
         log.warning("Không có bất kỳ kết quả phân tích nào được tạo ra. Dừng chu kỳ.")
         return "failed"
 
+    # Đánh giá khả năng lặp lại của mẫu hình thời gian — CHỈ để ghi log vận hành
+    # (phương án a): không đổi Gold/API/Frontend. Kết quả "confirmed" thể hiện
+    # dữ liệu đã đủ số chu kỳ quan sát độc lập hay chưa.
+    try:
+        cycle_assessment = assess_temporal_cycle_completeness(df)
+        for metric_name, details in cycle_assessment.items():
+            confirmed = [
+                p for p, d in details["cycle_details"].items() if d["confirmed"]
+            ]
+            if confirmed:
+                log.info(
+                    "Metric '%s': mẫu hình thời gian đã xác nhận chu kỳ lặp lại cho: %s",
+                    metric_name,
+                    ", ".join(confirmed),
+                )
+            else:
+                log.info(
+                    "Metric '%s': chưa đủ chu kỳ lặp lại để xác nhận mẫu hình thời gian.",
+                    metric_name,
+                )
+    except Exception as exc:
+        log.warning("Không đánh giá được tính chu kỳ của mẫu hình thời gian: %s", exc)
+
     # 4. Ghi nguyên tử (atomic) toàn bộ vào Data Mart
     write_all_analysis_results(
         resampled_records=resampled_records,
         histogram_records=histogram_records,
         trend_records=trend_records,
-        seasonal_records=seasonal_records,
+        temporal_pattern_records=temporal_pattern_records,
         correlation_records=correlation_records,
         latest_silver_ts=latest_ts,
     )
 
     is_partial = not all(bool(r) for r in all_computed)
     if is_partial:
+        if skipped_algorithms:
+            log.info(
+                "Các thuật toán bị quality gate bỏ qua: %s",
+                ", ".join(skipped_algorithms),
+            )
         log.info("=== HOÀN TẤT CHU KỲ PHÂN TÍCH (MỘT PHẦN / PARTIAL) ===")
         return "partial"
 

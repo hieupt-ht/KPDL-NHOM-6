@@ -4,15 +4,7 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock
 import pytest
 
-from writer import (
-    write_all_analysis_results,
-    write_correlation,
-    write_freshness,
-    write_histogram,
-    write_resampled,
-    write_seasonal,
-    write_trend,
-)
+from writer import write_all_analysis_results
 
 
 def test_write_all_analysis_results_transaction_and_params():
@@ -26,14 +18,14 @@ def test_write_all_analysis_results_transaction_and_params():
     resampled = [{"granularity": "day", "ts": latest_ts, "metric": "http_traffic", "mean": 1.0, "min": 0.5, "max": 1.5}]
     histogram = [{"metric": "http_traffic", "bin_start": 0.0, "bin_end": 1.0, "count": 10}]
     trend = [{"granularity": "week", "ts": latest_ts, "metric": "http_traffic", "trend_value": 0.9}]
-    seasonal = [{"period_type": "hour_of_day", "bucket": 10, "metric": "http_traffic", "value": 1.1}]
+    temporal_pattern = [{"period_type": "hour_of_day", "bucket": 10, "metric": "http_traffic", "value": 1.1}]
     correlation = [{"var_x": "http_traffic", "var_y": "l7_attack", "coef": 0.75}]
 
     write_all_analysis_results(
         resampled_records=resampled,
         histogram_records=histogram,
         trend_records=trend,
-        seasonal_records=seasonal,
+        temporal_pattern_records=temporal_pattern,
         correlation_records=correlation,
         latest_silver_ts=latest_ts,
         conn=mock_conn,
@@ -67,7 +59,7 @@ def test_parameterized_queries_verification():
         resampled_records=resampled,
         histogram_records=[],
         trend_records=[],
-        seasonal_records=[],
+        temporal_pattern_records=[],
         correlation_records=[],
         latest_silver_ts=latest_ts,
         conn=mock_conn,
@@ -98,7 +90,7 @@ def test_write_rollback_on_failure():
             resampled_records=resampled,
             histogram_records=[],
             trend_records=[],
-            seasonal_records=[],
+            temporal_pattern_records=[],
             correlation_records=[],
             latest_silver_ts=latest_ts,
             conn=mock_conn,
@@ -152,7 +144,7 @@ def test_write_all_rejects_nan_and_inf_values():
         with pytest.raises(ValueError, match="không hữu hạn"):
             write_all_analysis_results(
                 resampled_records=resampled,
-                histogram_records=[], trend_records=[], seasonal_records=[],
+                histogram_records=[], trend_records=[], temporal_pattern_records=[],
                 correlation_records=[], latest_silver_ts=latest_ts, conn=mock_conn,
             )
 
@@ -175,13 +167,13 @@ def test_write_all_rejects_non_finite_in_each_table():
                                  "bin_end": float("nan"), "count": 1}]),
         dict(trend_records=[{"granularity": "week", "ts": latest_ts,
                              "metric": "http_traffic", "trend_value": float("inf")}]),
-        dict(seasonal_records=[{"period_type": "hour_of_day", "bucket": 1,
+        dict(temporal_pattern_records=[{"period_type": "hour_of_day", "bucket": 1,
                                 "metric": "http_traffic", "value": float("nan")}]),
         dict(correlation_records=[{"var_x": "http_traffic", "var_y": "l7_attack",
                                    "coef": float("-inf")}]),
     ]
     base = dict(resampled_records=[], histogram_records=[], trend_records=[],
-                seasonal_records=[], correlation_records=[],
+                temporal_pattern_records=[], correlation_records=[],
                 latest_silver_ts=latest_ts, conn=mock_conn)
     for override in cases:
         kwargs = {**base, **override}
@@ -202,7 +194,7 @@ def test_write_all_idempotent_on_duplicate_execution():
                   "mean": 1.0, "min": 0.5, "max": 1.5}]
     kwargs = dict(
         resampled_records=resampled, histogram_records=[], trend_records=[],
-        seasonal_records=[], correlation_records=[], latest_silver_ts=latest_ts,
+        temporal_pattern_records=[], correlation_records=[], latest_silver_ts=latest_ts,
         conn=mock_conn,
     )
 
@@ -230,12 +222,12 @@ def test_write_all_deletes_only_tables_with_new_results():
     latest_ts = datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)
     resampled = [{"granularity": "day", "ts": latest_ts, "metric": "http_traffic", "mean": 1.0, "min": 0.5, "max": 1.5}]
 
-    # Chỉ resampled có dữ liệu; trend, seasonal, histogram, correlation rỗng
+    # Chỉ resampled có dữ liệu; trend, temporal_pattern, histogram, correlation rỗng
     write_all_analysis_results(
         resampled_records=resampled,
         histogram_records=[],
         trend_records=[],
-        seasonal_records=[],
+        temporal_pattern_records=[],
         correlation_records=[],
         latest_silver_ts=latest_ts,
         conn=mock_conn,
@@ -261,25 +253,41 @@ def test_write_all_analysis_results_rejects_none_silver_ts():
         write_all_analysis_results([], [], [], [], [], latest_silver_ts=None, conn=mock_conn)
 
 
-def test_individual_writers():
+def _freshness_upsert_calls(mock_cur):
+    return [c for c in mock_cur.execute.call_args_list if "gold.data_freshness" in c[0][0]]
+
+
+def _nonempty_all_five():
+    latest_ts = datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)
+    return dict(
+        resampled_records=[{"granularity": "day", "ts": latest_ts, "metric": "http_traffic", "mean": 1.0, "min": 0.5, "max": 1.5}],
+        histogram_records=[{"metric": "http_traffic", "bin_start": 0.0, "bin_end": 1.0, "count": 10}],
+        trend_records=[{"granularity": "week", "ts": latest_ts, "metric": "http_traffic", "trend_value": 0.9}],
+        temporal_pattern_records=[{"period_type": "hour_of_day", "bucket": 10, "metric": "http_traffic", "value": 1.1}],
+        correlation_records=[{"var_x": "http_traffic", "var_y": "l7_attack", "coef": 0.75}],
+        latest_silver_ts=latest_ts,
+    )
+
+
+def test_freshness_updated_only_when_all_five_groups_present():
+    """Phương án A: gold.data_freshness chỉ cập nhật khi CẢ 5 nhóm kết quả
+    đều có dữ liệu mới — freshness = mốc Silver của lần ghi 'đủ' gần nhất."""
     mock_conn = MagicMock()
     mock_cur = MagicMock()
     mock_conn.transaction.return_value.__enter__.return_value = None
     mock_conn.cursor.return_value.__enter__.return_value = mock_cur
 
-    now = datetime(2026, 11, 1, 0, 0, tzinfo=timezone.utc)
-    write_resampled(
-        [{"granularity": "day", "ts": now, "metric": "http_traffic", "mean": 1.0, "min": 0.5, "max": 1.5}],
-        conn=mock_conn,
-    )
-    write_histogram([{"metric": "http_traffic", "bin_start": 0.0, "bin_end": 1.0, "count": 10}], conn=mock_conn)
-    write_trend([{"granularity": "week", "ts": now, "metric": "http_traffic", "trend_value": 0.9}], conn=mock_conn)
-    write_seasonal(
-        [{"period_type": "hour_of_day", "bucket": 10, "metric": "http_traffic", "value": 1.1}],
-        conn=mock_conn,
-    )
-    write_correlation([{"var_x": "http_traffic", "var_y": "l7_attack", "coef": 0.75}], conn=mock_conn)
-    write_freshness(now, conn=mock_conn)
+    # Trường hợp 1: cả 5 nhóm đều có -> freshness được upsert
+    write_all_analysis_results(conn=mock_conn, **_nonempty_all_five())
+    assert len(_freshness_upsert_calls(mock_cur)) == 1
 
-    assert mock_conn.transaction.call_count == 6
-    assert mock_cur.executemany.call_count >= 5
+    # Trường hợp 2: chỉ 1 nhóm có -> các nhóm khác giữ data cũ, freshness KHÔNG đổi
+    mock_cur.reset_mock()
+    partial = _nonempty_all_five()
+    for key in ("histogram_records", "trend_records", "temporal_pattern_records", "correlation_records"):
+        partial[key] = []
+    write_all_analysis_results(conn=mock_conn, **partial)
+    assert _freshness_upsert_calls(mock_cur) == []
+    # Bảng rỗng không bị DELETE (giữ snapshot cũ), bảng có data vẫn được ghi
+    deleted = [c[0][0] for c in mock_cur.execute.call_args_list if "DELETE FROM" in c[0][0]]
+    assert deleted == ["DELETE FROM gold.timeseries_resampled"]
