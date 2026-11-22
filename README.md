@@ -1,16 +1,18 @@
 # Hệ thống Giám sát và Cảnh báo Bất thường An ninh mạng Việt Nam
 
+> Cập nhật 22/11/2026: đã gỡ đăng nhập, Viewer/Admin và Keycloak. Mở http://localhost:3000 vào thẳng Tổng quan; mọi người dùng được trang Vận hành. API không cần Bearer token; token Cloudflare và token nội bộ giữa API/logic vẫn dùng cho đúng mục đích riêng.
+>
+> Chạy sau khi pull: `Copy-Item .env.example .env` (chỉ khi chưa có .env), cấu hình dữ liệu/database, rồi `docker compose up -d --build`. Giữ nguyên volume dữ liệu. Các biến AUTH_ENABLED/KEYCLOAK/NEXTAUTH cũ không còn tác dụng. Hướng dẫn: [dashboard trực tiếp](docs/frontend-live-integration.md).
 **Kiến trúc microservices và Data Warehouse / Data Mart phân tích dữ liệu chuỗi thời gian từ Cloudflare Radar API (khu vực Việt Nam)**
 
 > Đồ án cuối kỳ môn Khai phá dữ liệu – GVHD: TS. Phạm Tuấn
 
 | Thành phần | Công nghệ |
 | :--- | :--- |
-| Frontend | Next.js (App Router), Tailwind CSS, Apache ECharts, Auth.js (NextAuth) |
+| Frontend | Next.js, React, Tailwind CSS, ECharts và SWR |
 | Backend | Python 3.11, FastAPI, pandas, scikit-learn, statsmodels, APScheduler |
 | Lưu trữ | PostgreSQL ×2: **Data Warehouse** (Bronze, Silver) và **Data Mart** (Gold) |
-| Xác thực | Keycloak: SSO theo chuẩn OpenID Connect (OIDC) |
-| Triển khai | Docker Compose (9 container) |
+| Triển khai | Docker Compose (8 container) |
 
 ---
 
@@ -21,7 +23,7 @@
 3. [Nguồn dữ liệu và Data Ingestion](#3-nguồn-dữ-liệu-và-data-ingestion)
 4. [Data Warehouse và Data Mart (Medallion)](#4-data-warehouse-và-data-mart-medallion)
 5. [Business Logic: thuật toán](#5-business-logic-thuật-toán)
-6. [API và xác thực SSO/OIDC](#6-api-và-xác-thực-ssooidc)
+6. [Backend API](#6-backend-api)
 7. [Frontend và các pattern trực quan hóa](#7-frontend-và-các-pattern-trực-quan-hóa)
 8. [Thông tin cấu hình hệ thống](#8-thông-tin-cấu-hình-hệ-thống)
 9. [Sơ đồ network và Docker](#9-sơ-đồ-network-và-docker)
@@ -42,7 +44,7 @@
 - Thu thập dữ liệu chuỗi thời gian 5 phút/lần, lưu vào Data Warehouse theo hai tầng Bronze và Silver.
 - Phân tích thống kê, re-sampling, tương quan, tính mùa vụ, phân cụm, dự báo (liên tục) và phân loại (rời rạc).
 - Ghi kết quả vào Data Mart (tầng Gold).
-- Dashboard web có đăng nhập SSO, zoom và filter.
+- Dashboard web mở trực tiếp, có zoom và filter.
 - **Ngoài phạm vi:** không chặn IP và không can thiệp tường lửa.
 
 > **Về bản chất dữ liệu:** Cloudflare Radar **không trả về số request tuyệt đối**. Giá trị được chuẩn hóa `MIN0_MAX` **theo từng cửa sổ truy vấn** (các endpoint dạng nhóm ra tỉ lệ %). Ingestion nối các cửa sổ về cùng một thang tương đối (xem mục 3.5), nên giá trị trong Silver **có thể lớn hơn 1**. Vì vậy hệ thống dùng khái niệm **"chỉ số lưu lượng"** và **"tỉ lệ %"**.
@@ -52,38 +54,12 @@
 ## 2. Kiến trúc tổng thể
 
 ```text
-                                   ┌───────────────────┐
-                                   │  Front End        │
-                                   │  Next.js+Tailwind │
-                                   └─────────┬─────────┘
-                                             │ JSON + Bearer token
-                                             ▼
-                                   ┌───────────────────┐   SSO    ┌──────────────────┐
-                                   │       API         │────────► │ Keycloak (OIDC)  │
-                                   │     (FastAPI)     │          └──────────────────┘
-                                   └───┬───────────┬───┘
-                       POST /jobs/run  │           │ SELECT (chỉ đọc)
-                                       ▼           ▼
-┌─────────────┐  Call API  ┌───────────┐     ┌──────────────────────────────────────┐
-│ Data Source │◄─────────► │   Data    │     │           Business Logic             │
-│ (Cloudflare │            │ Ingestion │     │  ┌──────────────┐  ┌──────────────┐  │
-│ Radar - VN) │            │ (5 phút)  │     │  │Data Analysis │  │  Clustering  │  │
-└─────────────┘            └─────┬─────┘     │  │  (5 phút)    │  │  (1 ngày)    │  │
-                                 │           │  └──────────────┘  └──────────────┘  │
-                                 │           │  ┌───────────────────────────────┐   │
-                                 │           │  │ Prediction (5 phút)           │   │
-                                 │           │  │  ├ Liên tục: hồi quy          │   │
-                                 │           │  │  └ Rời rạc: phân loại         │   │
-                                 │           │  └───────────────────────────────┘   │
-                                 │           └───────▲────────────────────┬─────────┘
-                                 ▼                   │ đọc Silver         │ ghi Gold
-                     ┌─────────────────────────┐     │       ┌────────────▼────────────┐
-                     │     DATA WAREHOUSE      │─────┘       │        DATA MART        │
-                     │  Bronze ──► Silver      │ ──────────► │          Gold           │◄── API đọc
-                     │  (thô)      (sạch)      │             │   (kết quả sẵn dùng)    │
-                     └─────────────────────────┘             └─────────────────────────┘
+Cloudflare Radar → Ingestion → Warehouse (Bronze/Silver)
+                                      ↓
+                        Analysis / Clustering / Prediction
+                                      ↓
+                         Mart (Gold) → FastAPI → Dashboard
 ```
-
 ### Nguyên tắc thiết kế
 
 - **Mỗi khối là một service độc lập**, chạy trong một container (hoặc một terminal khi phát triển).
@@ -107,7 +83,6 @@
 | **Prediction** | 5 phút | Silver | Gold | Dự báo **liên tục** (chỉ số lưu lượng ngày mai) và **rời rạc** (rủi ro Cao/Thấp) |
 | **Data Mart** | Thường trực | — | — | PostgreSQL chứa Gold |
 | **API** | Thường trực | Gold | — | REST/JSON cho frontend, xác thực token, trigger job |
-| **Keycloak** | Thường trực | — | — | Máy chủ SSO/OIDC |
 | **Front End** | Thường trực | API | — | Dashboard Next.js |
 
 ---
@@ -299,13 +274,14 @@ Các service chỉ **nạp mô hình đã huấn luyện sẵn** từ `models/` 
 
 ---
 
-## 6. API và xác thực SSO/OIDC
 
-> **Tiến độ Backend/API:** API đọc Gold đã có triển khai và kiểm thử riêng; xem [hợp đồng API](docs/api-contract.md) và [hướng dẫn chạy/kiểm thử](docs/backend-api-local.md). Đã bổ sung JWT/Keycloak, phân quyền Viewer/Admin, Jobs API và runner có nhật ký/chống chạy trùng; xem [hướng dẫn xác thực và job](docs/backend-auth-jobs.md). Tác vụ Analysis/ML hiện vẫn là stub và sẽ được ghi failed khi kích hoạt; Auth.js ở frontend cần tích hợp tiếp. Với schema Gold hiện tại, histogram/seasonal/correlation và status từ chối `start`/`end` bằng 422; timeseries/clusters hỗ trợ `limit`/`offset` và header phân trang. Các điểm dưới đây mô tả kiến trúc mục tiêu; hợp đồng chi tiết ghi rõ hành vi hiện tại và nullability.
+
+## 6. Backend API
+
+API và dashboard truy cập trực tiếp, không cần tài khoản hoặc Bearer token. Analysis đã có kết quả Radar thật; tích hợp ML vẫn được review riêng ở PR #23. Giữ schema Gold, validation, phân trang và xử lý dữ liệu trống. Xem [hợp đồng API](docs/api-contract.md).
 
 ### 6.1. Endpoint dữ liệu
 
-**Kiểm thử Backend bằng Docker:** PowerShell `./services/api/tests/run.ps1 -Mode All`, hoặc Bash `bash services/api/tests/run.sh all` (`unit`/`integration` để chạy từng phần). Bộ test dùng DB/Keycloak/mạng riêng, không cần Python/Node local hoặc `.env` và không chạm dữ liệu ứng dụng. Xem [hướng dẫn Docker](docs/backend-api-local.md) và [bàn giao tích hợp](docs/backend-integration-handoff.md). CI chạy cùng bộ test cho PR backend vào `develop`.
 
 API viết bằng FastAPI, chạy ở port `8000`, đọc từ Data Mart. Timeseries, trend, clusters và forecast nhận `start`/`end` (ISO 8601 có múi giờ); histogram/seasonal/correlation là snapshot nên chưa hỗ trợ khoảng thời gian tùy chọn. Xem hợp đồng API để biết phân trang và các mã lỗi.
 
@@ -320,47 +296,24 @@ API viết bằng FastAPI, chạy ở port `8000`, đọc từ Data Mart. Timese
 | `GET /api/forecast/continuous` | Dự báo chỉ số lưu lượng ngày mai |
 | `GET /api/forecast/discrete` | Nhãn rủi ro ngày mai |
 | `GET /api/status` | Lần chạy gần nhất của từng service và độ mới của dữ liệu |
-| `GET /api/jobs/runs/{run_id}` | Theo dõi chính xác một lần chạy (cần role `admin`) |
+| `GET /api/jobs/runs/{run_id}` | Theo dõi chính xác một lần chạy |
 | `GET /api/me` | Username, sub và role của người dùng đã xác thực |
-| `POST /api/jobs/{analysis\|clustering\|prediction}/run` | Kích hoạt Business Logic (cần role `admin`) |
+| `POST /api/jobs/{analysis\|clustering\|prediction}/run` | Kích hoạt Business Logic |
 
 - Bảng Gold trống thì API trả **`404`** kèm thông báo rõ ràng. Đây là lỗi cần thấy ở bước 5 của demo.
 - Thiếu token hoặc token sai thì trả **`401`**.
 
-### 6.2. Luồng đăng nhập SSO
+### 6.2. Truy cập trực tiếp
 
-**SSO (Single Sign-On)** nghĩa là ứng dụng không tự quản lý đăng nhập mà giao cho một máy chủ xác thực chuyên dụng (**Keycloak**). **OIDC (OpenID Connect)** là giao thức chuẩn để frontend, API và Keycloak trao đổi với nhau.
+Mở `http://localhost:3000` vào thẳng trang Tổng quan. Các trang Analysis, Forecast và Vận hành đều truy cập trực tiếp, không cần tài khoản, cookie phiên hoặc Bearer token. Không còn phân quyền Viewer/Admin hay `/api/me`.
 
-```text
-1. Người dùng mở dashboard → chưa đăng nhập → Next.js (Auth.js) chuyển sang trang login của Keycloak
-2. Đăng nhập thành công → Keycloak trả access token (JWT) → quay về dashboard
-3. Frontend gọi API kèm header:  Authorization: Bearer <access_token>
-4. API xác minh chữ ký JWT bằng public key (JWKS) của Keycloak, kiểm tra issuer và hạn dùng
-   → hợp lệ: trả JSON từ Data Mart
-   → không hợp lệ: 401
-```
-
-**Cấu hình Keycloak** (tự import từ file `keycloak/realm-export.json` khi container khởi động):
-
-- Realm: `cyber-radar`.
-- Client: `dashboard` (OIDC, confidential, redirect về `http://localhost:3000/*`).
-- Role `viewer`: được xem dashboard.
-- Role `admin`: được xem dashboard và chạy job.
-- User demo: `demo` (role `viewer`) và `admin` (role `admin`). Mật khẩu đặt trong `.env`.
-
-**Công tắc phát triển:** `AUTH_ENABLED=false` trong `.env` sẽ tắt kiểm tra token, giúp phát triển các phần khác trước khi làm xong SSO.
-
-> **Lưu ý cấu hình:** trình duyệt truy cập Keycloak qua `localhost:8080`, còn container API gọi qua `keycloak:8080`. Phải đặt `KC_HOSTNAME` (hoặc cấu hình issuer hợp lệ ở API) để trường `iss` trong token khớp với cấu hình, nếu không API sẽ trả 401.
-
----
-
+API đọc Gold vẫn dùng tài khoản PostgreSQL chỉ SELECT. Jobs API chuyển yêu cầu tới `/run` nội bộ bằng `JOB_TRIGGER_TOKEN`; token này nằm ở các service, không đưa ra browser. Giữ 202 + run_id, khóa chống trùng và nhật ký. Mọi người truy cập ứng dụng đều có thể sử dụng chức năng chạy job.
 ## 7. Frontend và các pattern trực quan hóa
 
 ### 7.1. Công nghệ
 
 - **Next.js (App Router)** và **Tailwind CSS** cho giao diện, có dark mode và responsive.
 - **Apache ECharts** (`echarts-for-react`) cho biểu đồ, có sẵn `dataZoom` (zoom) và tooltip.
-- **Auth.js (NextAuth)** với Keycloak provider để đăng nhập SSO.
 - **SWR** để gọi API, tự làm mới mỗi 5 phút (`refreshInterval`).
 
 > **Quan trọng cho demo:** dữ liệu biểu đồ được gọi **từ trình duyệt** (client component) thẳng tới API `http://localhost:8000/api/...`, để `F12 → Network` thấy rõ từng request JSON. Không fetch trong server component, vì như vậy request sẽ không hiện trong tab Network. API bật CORS cho `http://localhost:3000`.
@@ -368,7 +321,7 @@ API viết bằng FastAPI, chạy ở port `8000`, đọc từ Data Mart. Timese
 ### 7.2. Bố cục dashboard
 
 - **Thanh trên:**
-  - tên người dùng và nút đăng xuất
+  - chế độ dữ liệu API hoặc minh họa
   - thời điểm cập nhật cuối
   - bộ lọc khoảng thời gian, chỉ số và độ phân giải (Ngày/Tuần/Tháng)
 - **Hàng thẻ KPI:**
@@ -377,7 +330,7 @@ API viết bằng FastAPI, chạy ở port `8000`, đọc từ Data Mart. Timese
   - cụm của hôm nay
   - tỉ lệ bot hiện tại
 - **Lưới biểu đồ** gồm các pattern bên dưới.
-- **Trang `/admin`** (role `admin`): nút **Run** cho Analysis, Clustering và Prediction, cùng bảng `service_runs`.
+- **Trang `/admin`** (truy cập trực tiếp): nút **Run** cho Analysis, Clustering và Prediction, cùng bảng `service_runs`.
 
 ### 7.3. Các pattern
 
@@ -410,59 +363,14 @@ API viết bằng FastAPI, chạy ở port `8000`, đọc từ Data Mart. Timese
 | Thời gian huấn luyện | *(ghi số đo thực tế sau khi chạy `train_models.py`)* |
 | Khi nào huấn luyện lại | Thủ công, đề xuất mỗi tháng hoặc khi MAE trên dữ liệu mới tăng quá 20% |
 | Retry tối đa | Backoff đến 60 giây |
-| Hạn dùng access token | 5 phút, refresh token 30 phút (mặc định Keycloak) |
 
 ---
 
 ## 9. Sơ đồ network và Docker
 
-Tất cả container nằm chung một mạng bridge `cyber-net` và gọi nhau bằng tên service.
+Docker Compose có **8 service**: warehouse-db, mart-db, ingestion, analysis, clustering, prediction, api, frontend. Hai database giữ volume riêng; không xóa volume để cập nhật code.
 
-```text
-                        Trình duyệt
-              │ :3000                    │ :8080 (trang login)
-              ▼                          ▼
-┌─────────────────────────────── cyber-net ───────────────────────────────┐
-│                                                                         │
-│   ┌──────────┐  JSON + token  ┌──────────┐    JWKS     ┌──────────┐     │
-│   │ frontend │──────────────► │   api    │───────────► │ keycloak │     │
-│   │  :3000   │ (từ trình duyệt)│  :8000   │             │  :8080   │     │
-│   └──────────┘                └────┬─────┘             └──────────┘     │
-│                         trigger    │      SELECT                        │
-│              ┌─────────────────────┤ ─────────────────┐                 │
-│              ▼                     ▼                  ▼                 │
-│   ┌────────────────────────────────────┐      ┌──────────────┐          │
-│   │ analysis:8001  clustering:8002     │─────►│   mart-db    │          │
-│   │ prediction:8003                    │ ghi  │    :5433     │          │
-│   └───────────────▲────────────────────┘      └──────────────┘          │
-│                   │ đọc Silver                                          │
-│   ┌───────────┐   │      ┌──────────────┐                               │
-│   │ ingestion │───┴─────►│ warehouse-db │                               │
-│   └─────┬─────┘   ghi    │    :5432     │                               │
-│         │                └──────────────┘                               │
-└─────────┼───────────────────────────────────────────────────────────────┘
-          │ HTTPS
-          ▼
-  api.cloudflare.com (Radar)
-```
-
-| Container | Image / Build | Port public | Phụ thuộc |
-| :--- | :--- | :--- | :--- |
-| `warehouse-db` | postgres:16 | 5432 | — |
-| `mart-db` | postgres:16 | 5433 | — |
-| `keycloak` | quay.io/keycloak/keycloak | 8080 | — |
-| `ingestion` | `services/ingestion` | — | warehouse-db |
-| `analysis` | `services/analysis` | 8001 | warehouse-db, mart-db |
-| `clustering` | `services/clustering` | 8002 | warehouse-db, mart-db |
-| `prediction` | `services/prediction` | 8003 | warehouse-db, mart-db |
-| `api` | `services/api` | 8000 | mart-db, keycloak |
-| `frontend` | `frontend` (Next.js) | 3000 | api, keycloak |
-
-- Hai database dùng hai volume riêng là `warehouse-data` và `mart-data`.
-- Service nào cũng có `healthcheck`; các service phụ thuộc DB chờ DB healthy rồi mới chạy.
-
----
-
+Browser gọi frontend ở cổng 3000 và API ở 8000. Các service dùng tên nội bộ trên network cyber-net; API gọi logic service qua X-Job-Token. Không cần service đăng nhập hoặc cổng 8080.
 ## 10. Cấu trúc mã nguồn
 
 ```text
@@ -473,7 +381,6 @@ cyber-radar-vn/
 ├── db/
 │   ├── warehouse/init.sql          # schema bronze, silver + user/quyền
 │   └── mart/init.sql               # schema gold + user/quyền
-├── keycloak/
 │   └── realm-export.json           # realm cyber-radar, client, role, user demo
 ├── backend/
 │   └── common/                     # package Python dùng chung
@@ -494,7 +401,6 @@ cyber-radar-vn/
 │   └── api/
 │       ├── Dockerfile
 │       ├── main.py
-│       ├── auth.py                 # xác minh JWT từ Keycloak
 │       └── routers/                # timeseries, analysis, ml, jobs, status
 ├── frontend/                       # Next.js + Tailwind
 │   ├── Dockerfile
@@ -526,7 +432,6 @@ cyber-radar-vn/
 
 ```bash
 cp .env.example .env
-# Điền CF_API_TOKEN, mật khẩu 2 database, KEYCLOAK_CLIENT_SECRET, AUTH_SECRET, mật khẩu user demo
 ```
 
 **Bước 2. Chạy toàn bộ hệ thống**
@@ -537,9 +442,8 @@ docker compose up -d --build
 
 | Địa chỉ | Nội dung |
 | :--- | :--- |
-| `http://localhost:3000` | Dashboard (đăng nhập bằng user `demo`) |
+| `http://localhost:3000` | Dashboard (vào thẳng trang chủ) |
 | `http://localhost:8000/docs` | Swagger của API |
-| `http://localhost:8080` | Trang quản trị Keycloak |
 
 **Bước 3 (chỉ khi cần). Huấn luyện lại mô hình**
 
@@ -554,8 +458,8 @@ python training/train_models.py
 | Bước | Thao tác | Kết quả mong đợi |
 | :--- | :--- | :--- |
 | 1 | `docker compose down`, sau đó `docker ps -a` | Không còn container nào |
-| 2 | `docker compose up -d --build` | 9 container chạy |
-| 3 | Mở web, đăng nhập SSO, bật `F12 → Network` | Đủ biểu đồ; thấy request `/api/...` mang header `Authorization` và trả JSON |
+| 2 | `docker compose up -d --build` | 8 container chạy |
+| 3 | Mở web trực tiếp, bật `F12 → Network` | Đủ biểu đồ; thấy request `/api/...` trả JSON, không cần Bearer token |
 | 4 | Vào **Data Mart**, xóa dữ liệu Gold (lệnh ngay bên dưới) | Gold trống, **Warehouse vẫn còn nguyên** |
 | 5 | Tải lại web | Biểu đồ báo "Chưa có dữ liệu", API trả 404 |
 | 6 | Vào trang `/admin` bấm **Run** (hoặc gọi `POST /run` của từng service), mô hình có sẵn và không train lại; mở lại Data Mart | Bảng Gold có dữ liệu mới |
@@ -577,13 +481,12 @@ TRUNCATE gold.timeseries_resampled, gold.histogram, gold.trend, gold.seasonal,
 
 | Tiêu chí | Điểm | Cách hệ thống đáp ứng |
 | :--- | :--- | :--- |
-| Hệ thống thiết kế giống sơ đồ khối | 3 | Đủ các khối Source, Ingestion, Database, Business Logic, API và FE; mở rộng theo bài giảng với Warehouse/Mart, Medallion và SSO |
+| Hệ thống thiết kế giống sơ đồ khối | 3 | Đủ các khối Source, Ingestion, Database, Business Logic, API và FE; mở rộng theo bài giảng với Warehouse/Mart, Medallion |
 | Đủ pattern (có xử lý và load từ API) | 3 | 6 pattern và phân cụm, tính ở backend, lưu Gold, trả qua API |
 | Web đẹp | 1 | Next.js, Tailwind, ECharts, dark mode, responsive |
-| Docker | 1 | `docker-compose.yml` với 9 container |
+| Docker | 1 | `docker-compose.yml` với 8 container |
 | Slide trình bày | 1 | `docs/slides.pdf` |
 | Cấu trúc source code | 1 | Tách theo service, có package dùng chung `backend/common` |
-| *Điểm cộng* | — | Zoom/filter; SSO/OIDC; deploy cloud (AWS: EC2, Lambda + EventBridge cho Ingestion, RDS PostgreSQL) |
 
 **Checklist báo cáo:**
 
@@ -602,8 +505,6 @@ TRUNCATE gold.timeseries_resampled, gold.histogram, gold.trend, gold.seasonal,
 2. Cloudflare Radar API Documentation. https://developers.cloudflare.com/radar/
 3. Cloudflare Radar – Normalization methods. https://developers.cloudflare.com/radar/concepts/normalization/
 4. Databricks – What is a Medallion Architecture? https://www.databricks.com/glossary/medallion-architecture
-5. Keycloak Documentation. https://www.keycloak.org/documentation
 6. OpenID Connect Core 1.0. https://openid.net/specs/openid-connect-core-1_0.html
 7. Next.js Documentation. https://nextjs.org/docs
-8. Auth.js – Keycloak Provider. https://authjs.dev
 9. scikit-learn. https://scikit-learn.org

@@ -1,4 +1,4 @@
-"""Admin job proxy tests: fixed destinations, no retries and sanitized failures."""
+"""Public job proxy tests: fixed destinations, no retries and sanitized failures."""
 
 import httpx
 import pytest
@@ -20,8 +20,8 @@ def upstream(monkeypatch):
     return install
 
 
-def test_admin_can_trigger_job_and_sends_internal_token(
-    client, issuer, upstream, monkeypatch
+def test_any_client_can_trigger_job_and_sends_internal_token(
+    client, upstream, monkeypatch
 ):
     monkeypatch.setattr(settings, "job_trigger_token", SecretStr("internal-test-token"))
 
@@ -36,7 +36,6 @@ def test_admin_can_trigger_job_and_sends_internal_token(
     upstream(handler)
     response = client.post(
         "/api/jobs/analysis/run",
-        headers={"Authorization": "Bearer " + issuer["token"](["admin"])},
     )
     assert response.status_code == 202
     assert response.json()["run_id"] == 10
@@ -83,25 +82,16 @@ def test_invalid_upstream_body(client, upstream, payload):
     assert client.post("/api/jobs/analysis/run").status_code == 502
 
 
-def test_missing_internal_secret_when_auth_enabled(client, issuer, monkeypatch):
+def test_missing_internal_secret(client, monkeypatch):
     monkeypatch.setattr(settings, "job_trigger_token", SecretStr(""))
     response = client.post(
         "/api/jobs/analysis/run",
-        headers={"Authorization": "Bearer " + issuer["token"](["admin"])},
     )
     assert response.status_code == 503
 
 
 def test_arbitrary_service_is_rejected(client):
     assert client.post("/api/jobs/other/run").status_code == 422
-
-
-def test_viewer_cannot_read_job_run(client, issuer):
-    response = client.get(
-        "/api/jobs/runs/1",
-        headers={"Authorization": "Bearer " + issuer["token"](["viewer"])},
-    )
-    assert response.status_code == 403
 
 
 @pytest.mark.integration

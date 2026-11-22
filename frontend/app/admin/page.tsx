@@ -1,8 +1,6 @@
 "use client";
-import Link from "next/link";
 import { useEffect, useState } from "react";
 import useSWR from "swr";
-import { useDashboardRole } from "@/components/layout/AppShell";
 import { Chip, DataState, formatDate, PageHeading, Panel } from "@/components/ui/Elements";
 import { ApiError, DATA_MODE, getJobRun, getStatus, runJob } from "@/lib/api";
 import type { AcceptedJob, ServiceRun } from "@/types/api";
@@ -15,8 +13,8 @@ const services = [
 const statusLabel = (value: string | null | undefined) => (({ running: "Đang chạy", success: "Hoàn tất", failed: "Thất bại", partial: "Hoàn tất một phần", skipped: "Đã bỏ qua", interrupted: "Bị gián đoạn" } as Record<string, string>)[value ?? ""] ?? value ?? "Chưa có dữ liệu");
 
 export default function AdminPage() {
-  const { role, isDemo } = useDashboardRole();
-  const { data, error, isLoading, mutate } = useSWR(role === "admin" ? "admin-status" : null, () => getStatus(), { refreshInterval: DATA_MODE === "api" ? 300_000 : 0 });
+  const isDemo = DATA_MODE === "demo";
+  const { data, error, isLoading, mutate } = useSWR("admin-status", () => getStatus(), { refreshInterval: DATA_MODE === "api" ? 300_000 : 0 });
   const [sending, setSending] = useState<string | null>(null);
   const [pending, setPending] = useState<AcceptedJob | null>(null);
   const [tracked, setTracked] = useState<ServiceRun[]>([]);
@@ -47,7 +45,6 @@ export default function AdminPage() {
     void poll();
     return () => { stopped = true; clearTimeout(timer); };
   }, [pending, mutate]);
-  if (role !== "admin") return <div className="panel access-state"><span className="eyebrow">Vai trò Viewer</span><h1>Trang dành cho Admin</h1><p className="lead">Tài khoản hiện tại chỉ có quyền xem dashboard.</p>{isDemo && <p>Công tắc vai trò ở góc trên chỉ phục vụ trình diễn UI.</p>}<Link href="/" className="button">Về Tổng quan</Link></div>;
   async function execute(service: "analysis" | "clustering" | "prediction") {
     setSending(service); setFeedback(null);
     try {
@@ -60,8 +57,8 @@ export default function AdminPage() {
   }
   const rows = [...new Map([...(data?.service_runs ?? []), ...tracked].map(row => [row.id, row])).values()].sort((a, b) => b.id - a.id);
   return <>
-    <PageHeading eyebrow="Quản trị · Admin" title="Vận hành dữ liệu">Theo dõi độ mới của Data Mart và kết quả thực thi từng tác vụ.</PageHeading>
-    <div className="notice" role="note"><strong>{isDemo ? "Chế độ minh họa:" : "Đã xác thực Admin:"}</strong> {isDemo ? "Các nút chạy job bị khóa. Dữ liệu hiện tại là minh họa." : "Yêu cầu được tiếp nhận trước khi tác vụ hoàn tất. Kết quả được đọc lại theo đúng mã lần chạy."}</div>
+    <PageHeading eyebrow="Vận hành hệ thống" title="Vận hành dữ liệu">Theo dõi độ mới của Data Mart và kết quả thực thi từng tác vụ.</PageHeading>
+    <div className="notice" role="note"><strong>{isDemo ? "Chế độ minh họa:" : "Vận hành tác vụ:"}</strong> {isDemo ? "Các nút chạy job bị khóa. Dữ liệu hiện tại là minh họa." : "Yêu cầu được tiếp nhận trước khi tác vụ hoàn tất. Kết quả được đọc lại theo đúng mã lần chạy."}</div>
     <div className="service-grid" style={{ marginTop: 17 }}>{services.map(service => {
       const latest = rows.find(row => row.service === service.id);
       return <section className="panel service-card" key={service.id}>

@@ -2,14 +2,14 @@
 
 from typing import Annotated
 
-from auth import require_user
-from dependencies import Page, TimeRange, get_mart
 from fastapi import APIRouter, Depends, Response
 from psycopg import Connection
+
+from dependencies import Page, TimeRange, get_mart
 from repository import forecast, read_rows, require_rows, time_conditions
 from schemas import ClusterResult, ForecastContinuous, ForecastDiscrete
 
-router = APIRouter(dependencies=[Depends(require_user)], tags=["ML"])
+router = APIRouter(tags=["ML"])
 Mart = Annotated[Connection, Depends(get_mart)]
 Window = Annotated[TimeRange, Depends()]
 
