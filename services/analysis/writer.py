@@ -47,13 +47,16 @@ _TREND_INSERT = """
 """
 _TREND_COLS = ("granularity", "ts", "metric", "trend_value")
 
-_SEASONAL_DELETE = "DELETE FROM gold.seasonal"
-_SEASONAL_INSERT = """
+# Tên hàm/hằng Python dùng "temporal_pattern" (mẫu hình thời gian) cho đúng
+# nghiệp vụ, nhưng câu SQL vẫn ghi vào gold.seasonal — tên bảng Gold là hợp
+# đồng liên module với api/frontend, giữ nguyên vì tương thích.
+_TEMPORAL_PATTERN_DELETE = "DELETE FROM gold.seasonal"
+_TEMPORAL_PATTERN_INSERT = """
     INSERT INTO gold.seasonal
         (period_type, bucket, metric, value)
     VALUES (%s, %s, %s, %s)
 """
-_SEASONAL_COLS = ("period_type", "bucket", "metric", "value")
+_TEMPORAL_PATTERN_COLS = ("period_type", "bucket", "metric", "value")
 
 _CORRELATION_DELETE = "DELETE FROM gold.correlation"
 _CORRELATION_INSERT = """
@@ -130,95 +133,11 @@ def _with_mart_conn(
             fn(own_conn)
 
 
-def write_resampled(
-    resampled_records: Sequence[dict[str, Any]],
-    conn: psycopg.Connection | None = None,
-) -> None:
-    """Ghi bảng gold.timeseries_resampled."""
-    def _run(c: psycopg.Connection) -> None:
-        with c.transaction():
-            with c.cursor() as cur:
-                _replace_gold_table(cur, _RESAMPLED_DELETE, _RESAMPLED_INSERT, _RESAMPLED_COLS, resampled_records)
-
-    _with_mart_conn(conn, _run)
-
-
-def write_histogram(
-    histogram_records: Sequence[dict[str, Any]],
-    conn: psycopg.Connection | None = None,
-) -> None:
-    """Ghi bảng gold.histogram."""
-    def _run(c: psycopg.Connection) -> None:
-        with c.transaction():
-            with c.cursor() as cur:
-                _replace_gold_table(cur, _HISTOGRAM_DELETE, _HISTOGRAM_INSERT, _HISTOGRAM_COLS, histogram_records)
-
-    _with_mart_conn(conn, _run)
-
-
-def write_trend(
-    trend_records: Sequence[dict[str, Any]],
-    conn: psycopg.Connection | None = None,
-) -> None:
-    """Ghi bảng gold.trend."""
-    def _run(c: psycopg.Connection) -> None:
-        with c.transaction():
-            with c.cursor() as cur:
-                _replace_gold_table(cur, _TREND_DELETE, _TREND_INSERT, _TREND_COLS, trend_records)
-
-    _with_mart_conn(conn, _run)
-
-
-def write_seasonal(
-    seasonal_records: Sequence[dict[str, Any]],
-    conn: psycopg.Connection | None = None,
-) -> None:
-    """Ghi bảng gold.seasonal."""
-    def _run(c: psycopg.Connection) -> None:
-        with c.transaction():
-            with c.cursor() as cur:
-                _replace_gold_table(cur, _SEASONAL_DELETE, _SEASONAL_INSERT, _SEASONAL_COLS, seasonal_records)
-
-    _with_mart_conn(conn, _run)
-
-
-def write_correlation(
-    correlation_records: Sequence[dict[str, Any]],
-    conn: psycopg.Connection | None = None,
-) -> None:
-    """Ghi bảng gold.correlation."""
-    def _run(c: psycopg.Connection) -> None:
-        with c.transaction():
-            with c.cursor() as cur:
-                _replace_gold_table(
-                    cur,
-                    _CORRELATION_DELETE,
-                    _CORRELATION_INSERT,
-                    _CORRELATION_COLS,
-                    correlation_records,
-                )
-
-    _with_mart_conn(conn, _run)
-
-
-def write_freshness(
-    latest_silver_ts: datetime,
-    conn: psycopg.Connection | None = None,
-) -> None:
-    """Cập nhật gold.data_freshness."""
-    def _run(c: psycopg.Connection) -> None:
-        with c.transaction():
-            with c.cursor() as cur:
-                _upsert_freshness(cur, latest_silver_ts)
-
-    _with_mart_conn(conn, _run)
-
-
 def write_all_analysis_results(
     resampled_records: Sequence[dict[str, Any]],
     histogram_records: Sequence[dict[str, Any]],
     trend_records: Sequence[dict[str, Any]],
-    seasonal_records: Sequence[dict[str, Any]],
+    temporal_pattern_records: Sequence[dict[str, Any]],
     correlation_records: Sequence[dict[str, Any]],
     latest_silver_ts: datetime,
     conn: psycopg.Connection | None = None,
@@ -226,9 +145,16 @@ def write_all_analysis_results(
     """Ghi toàn bộ kết quả phân tích vào Data Mart trong một transaction duy nhất.
 
     Đối với mỗi bảng Gold: chỉ xóa và ghi lại khi kết quả mới không rỗng.
-    Bảng có kết quả rỗng (ví dụ trend không đủ dữ liệu) được giữ nguyên dữ liệu cũ.
-    Nếu tất cả kết quả đều rỗng: không ghi gì và không cập nhật gold.data_freshness,
-    tránh báo cáo freshness "thành công" khi chưa có kết quả hợp lệ nào.
+    Bảng có kết quả rỗng (ví dụ trend không đủ dữ liệu, hoặc thuật toán bị
+    quality gate bỏ qua) được giữ nguyên dữ liệu cũ.
+
+    Freshness (phương án A — không đổi schema): gold.data_freshness chỉ được
+    cập nhật khi CẢ 5 nhóm kết quả đều có dữ liệu mới trong chu kỳ này, tức là
+    lần ghi "đủ" gần nhất. Nếu một nhóm rỗng: các nhóm khác vẫn được ghi, bảng
+    rỗng giữ snapshot cũ, freshness giữ nguyên giá trị cũ — consumer không bị
+    hiểu nhầm rằng mọi bảng Gold đều mới.
+
+    Nếu tất cả kết quả đều rỗng: không ghi gì và không cập nhật freshness.
     Nếu bất kỳ thao tác nào thất bại, toàn bộ transaction bị rollback.
     Nếu latest_silver_ts là None, hàm này không được gọi.
     """
@@ -239,7 +165,7 @@ def write_all_analysis_results(
         (_RESAMPLED_DELETE, _RESAMPLED_INSERT, _RESAMPLED_COLS, resampled_records),
         (_HISTOGRAM_DELETE, _HISTOGRAM_INSERT, _HISTOGRAM_COLS, histogram_records),
         (_TREND_DELETE, _TREND_INSERT, _TREND_COLS, trend_records),
-        (_SEASONAL_DELETE, _SEASONAL_INSERT, _SEASONAL_COLS, seasonal_records),
+        (_TEMPORAL_PATTERN_DELETE, _TEMPORAL_PATTERN_INSERT, _TEMPORAL_PATTERN_COLS, temporal_pattern_records),
         (_CORRELATION_DELETE, _CORRELATION_INSERT, _CORRELATION_COLS, correlation_records),
     )
 
@@ -250,22 +176,39 @@ def write_all_analysis_results(
         )
         return
 
+    all_groups_fresh = all(spec[3] for spec in table_specs)
+    kept_tables = [
+        name for name, spec in zip(
+            ("timeseries_resampled", "histogram", "trend", "seasonal", "correlation"),
+            table_specs,
+        )
+        if not spec[3]
+    ]
+    if kept_tables:
+        log.info(
+            "Các bảng Gold giữ nguyên dữ liệu cũ do không có kết quả mới: %s. "
+            "gold.data_freshness không được cập nhật (chỉ cập nhật khi cả 5 nhóm đủ).",
+            ", ".join(kept_tables),
+        )
+
     def _execute_in_transaction(c: psycopg.Connection) -> None:
         with c.transaction():
             with c.cursor() as cur:
                 for delete_sql, insert_sql, columns, records in table_specs:
                     _replace_gold_table(cur, delete_sql, insert_sql, columns, records)
-                # Cập nhật gold.data_freshness sau khi toàn bộ tác vụ thành công
-                _upsert_freshness(cur, latest_silver_ts)
+                # Freshness = mốc Silver của lần ghi ĐỦ GẦN NHẤT: chỉ cập nhật
+                # khi cả 5 nhóm kết quả đều được tính và ghi mới trong chu kỳ này.
+                if all_groups_fresh:
+                    _upsert_freshness(cur, latest_silver_ts)
 
     _with_mart_conn(conn, _execute_in_transaction)
 
     log.info(
-        "Ghi Data Mart thành công: %d resampled, %d histogram, %d trend, %d seasonal, %d correlation. Freshness: %s",
+        "Ghi Data Mart thành công: %d resampled, %d histogram, %d trend, %d temporal_pattern, %d correlation. Freshness cập nhật: %s",
         len(resampled_records),
         len(histogram_records),
         len(trend_records),
-        len(seasonal_records),
+        len(temporal_pattern_records),
         len(correlation_records),
-        latest_silver_ts,
+        all_groups_fresh,
     )

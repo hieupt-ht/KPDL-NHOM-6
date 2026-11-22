@@ -231,7 +231,7 @@ def test_quality_temporal_coverage_calculation():
 
 def test_algorithm_fitness_evaluation():
     base = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
-    # 24 giờ cho 5 metrics: đủ resampling, seasonal, correlation; chưa đủ trend (cần >= 8 tuần)
+    # 24 giờ cho 5 metrics: đủ resampling, temporal_pattern, correlation; chưa đủ trend (cần >= 8 tuần)
     rows = []
     for i in range(24):
         ts = base + timedelta(hours=i)
@@ -245,6 +245,108 @@ def test_algorithm_fitness_evaluation():
 
     assert report.algorithm_fitness["resampling"] is True
     assert report.algorithm_fitness["histogram"] is True
-    assert report.algorithm_fitness["seasonal"] is True
+    assert report.algorithm_fitness["temporal_pattern"] is True
     assert report.algorithm_fitness["correlation"] is True
     assert report.algorithm_fitness["trend"] is False  # 24 giờ < 8 tuần -> False
+
+
+def test_algorithm_fitness_temporal_pattern_uses_algorithm_minimum():
+    """Gate temporal_pattern phải khớp thuật toán: chỉ cần >= 3 timestamp distinct
+    (MIN_TEMPORAL_PATTERN_OBSERVATIONS), không còn đòi >= 24 bản ghi hợp lệ."""
+    base = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    rows = []
+    for i in range(5):
+        ts = base + timedelta(hours=i)
+        rows.append({"ts": ts, "metric": "http_traffic", "value": 1.0 + i})
+        rows.append({"ts": ts, "metric": "l7_attack", "value": 0.5 + i * 0.1})
+        rows.append({"ts": ts, "metric": "bot_share", "value": 20.0 + i})
+        rows.append({"ts": ts, "metric": "human_share", "value": 80.0 - i})
+        rows.append({"ts": ts, "metric": "netflows", "value": 10.0 + i})
+    df = pd.DataFrame(rows)
+    report = evaluate_data_quality(df)
+
+    assert report.metrics_summary["http_traffic"].sufficient_for_temporal_pattern is True
+    assert report.metrics_summary["http_traffic"].is_sufficient is False  # 5 < 24
+    assert report.algorithm_fitness["temporal_pattern"] is True
+    assert report.algorithm_fitness["resampling"] is True
+    assert report.algorithm_fitness["histogram"] is True
+    assert report.algorithm_fitness["correlation"] is True  # 5 obs >= 3, variance > 0
+    assert report.algorithm_fitness["trend"] is False
+
+
+def test_algorithm_fitness_correlation_needs_min_pairwise_observations():
+    """Gate correlation phải đếm quan sát GHÉP CẶP >= MIN_OBSERVATIONS (3),
+    không chỉ đếm số metric có phương sai.
+
+    Mỗi metric chỉ có 2 quan sát -> mọi cặp (kể cả tự tương quan) đều < 3
+    -> correlation_feasible = False dù mỗi metric đều 'có variance'.
+    """
+    base = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    rows = []
+    for i, m in enumerate(("http_traffic", "l7_attack", "bot_share", "human_share", "netflows")):
+        for j in range(2):
+            rows.append({
+                "ts": base + timedelta(hours=i * 10 + j),
+                "metric": m,
+                "value": 1.0 + j + i * 0.1,
+            })
+    df = pd.DataFrame(rows)
+    report = evaluate_data_quality(df)
+
+    assert report.algorithm_fitness["correlation"] is False
+    # Các thuật toán khác vẫn đánh giá độc lập theo điều kiện riêng
+    assert report.algorithm_fitness["resampling"] is True
+    assert report.algorithm_fitness["histogram"] is True
+    assert report.algorithm_fitness["temporal_pattern"] is False  # 2 distinct ts < 3
+    assert report.algorithm_fitness["trend"] is False
+
+
+def test_algorithm_fitness_zero_variance_metric():
+    """Metric không biến thiên không được tính là 'đủ' cho correlation."""
+    base = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    rows = []
+    # http_traffic biến thiên, 4 metric còn lại hằng số -> chỉ còn tự tương quan
+    # của http_traffic là đủ điều kiện -> fitness vẫn True (thuật toán vẫn ghi
+    # được bản ghi đường chéo), nhưng không có cặp chéo nào.
+    for i in range(10):
+        ts = base + timedelta(hours=i)
+        rows.append({"ts": ts, "metric": "http_traffic", "value": float(i)})
+        for m, v in (("l7_attack", 0.5), ("bot_share", 20.0), ("human_share", 80.0), ("netflows", 10.0)):
+            rows.append({"ts": ts, "metric": m, "value": v})
+    df = pd.DataFrame(rows)
+    report = evaluate_data_quality(df)
+
+    # Tự tương quan http_traffic đủ điều kiện -> gate True và thuật toán cũng
+    # thực sự tạo bản ghi (r = 1.0 đường chéo)
+    assert report.algorithm_fitness["correlation"] is True
+
+    # Đối chiếu trực tiếp: thuật toán chỉ ghi đúng 1 bản ghi đường chéo
+    from correlation import compute_correlation_records
+    records = compute_correlation_records(df)
+    assert records == [{"var_x": "http_traffic", "var_y": "http_traffic", "coef": 1.0}]
+
+
+def test_gate_fitness_matches_actual_algorithm_output(sample_silver_df, long_sample_silver_df):
+    """Với mọi thuật toán: fitness=True thì compute_* phải tạo >= 1 bản ghi,
+    và ngược lại fitness=False thì compute_* trả về rỗng."""
+    from resampling import compute_resampling_records
+    from histogram import compute_histogram_records
+    from trend import compute_trend_records
+    from temporal_patterns import compute_temporal_pattern_records
+    from correlation import compute_correlation_records
+
+    computes = {
+        "resampling": compute_resampling_records,
+        "histogram": compute_histogram_records,
+        "trend": compute_trend_records,
+        "temporal_pattern": compute_temporal_pattern_records,
+        "correlation": compute_correlation_records,
+    }
+    for df in (sample_silver_df, long_sample_silver_df):
+        report = evaluate_data_quality(df)
+        for name, fn in computes.items():
+            produced = len(fn(df)) > 0
+            assert report.algorithm_fitness[name] == produced, (
+                f"Gate '{name}'={report.algorithm_fitness[name]} nhưng compute_* "
+                f"{'có' if produced else 'không có'} bản ghi"
+            )

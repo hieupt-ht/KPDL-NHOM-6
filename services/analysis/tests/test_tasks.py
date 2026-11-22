@@ -53,7 +53,7 @@ def test_run_all_success_flow(sample_silver_df):
         kwargs = mock_write.call_args[1]
         assert len(kwargs["resampled_records"]) > 0
         assert len(kwargs["histogram_records"]) > 0
-        assert len(kwargs["seasonal_records"]) > 0
+        assert len(kwargs["temporal_pattern_records"]) > 0
         assert len(kwargs["correlation_records"]) > 0
         assert kwargs["latest_silver_ts"] is not None
 
@@ -65,26 +65,39 @@ def test_run_all_database_error_propagates():
             tasks.run_all()
 
 
-def test_individual_compute_tasks(sample_silver_df):
+def test_run_all_uses_quality_gate_per_algorithm(sample_silver_df):
+    """run_all phải dùng algorithm_fitness để bỏ qua thuật toán không đủ điều kiện.
+
+    sample_silver_df chỉ có 24 giờ -> trend fitness = False -> compute_trend_records
+    KHÔNG được gọi, trend_records = [] và run trả về 'partial'.
+    """
     with patch("tasks.fetch_silver_metrics", return_value=sample_silver_df), \
-         patch("tasks.write_resampled") as mock_resampled, \
-         patch("tasks.write_histogram") as mock_hist, \
-         patch("tasks.write_trend"), \
-         patch("tasks.write_seasonal") as mock_seasonal, \
-         patch("tasks.write_correlation") as mock_corr:
+         patch("tasks.compute_resampling_records", return_value=[{"ok": 1}]) as m_resample, \
+         patch("tasks.compute_histogram_records", return_value=[{"ok": 1}]) as m_hist, \
+         patch("tasks.compute_trend_records", return_value=[{"ok": 1}]) as m_trend, \
+         patch("tasks.compute_temporal_pattern_records", return_value=[{"ok": 1}]) as m_temporal, \
+         patch("tasks.compute_correlation_records", return_value=[{"ok": 1}]) as m_corr, \
+         patch("tasks.write_all_analysis_results") as mock_write:
+        status = tasks.run_all()
 
-        tasks.compute_resampled()
-        mock_resampled.assert_called_once()
+    m_resample.assert_called_once()
+    m_hist.assert_called_once()
+    m_trend.assert_not_called()
+    m_temporal.assert_called_once()
+    m_corr.assert_called_once()
 
-        tasks.compute_histogram()
-        mock_hist.assert_called_once()
+    assert status == "partial"
+    kwargs = mock_write.call_args[1]
+    assert kwargs["trend_records"] == []
+    assert len(kwargs["resampled_records"]) == 1
 
-        tasks.compute_trend()
-        # sample_silver_df có 24h, không đủ 8 tuần nên trend rỗng, không gọi write_trend
 
-        tasks.compute_seasonal()
-        mock_seasonal.assert_called_once()
-
-        tasks.compute_correlation()
-        mock_corr.assert_called_once()
+def test_run_all_is_single_entry_point():
+    """run_all là entry point duy nhất: không còn các hàm compute_* riêng lẻ
+    bypass quality gate/snapshot/freshness."""
+    assert not hasattr(tasks, "compute_resampled")
+    assert not hasattr(tasks, "compute_histogram")
+    assert not hasattr(tasks, "compute_trend")
+    assert not hasattr(tasks, "compute_temporal_patterns")
+    assert not hasattr(tasks, "compute_correlation")
 

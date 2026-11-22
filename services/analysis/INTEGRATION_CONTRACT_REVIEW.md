@@ -52,7 +52,7 @@
 | `GET /api/trend` | `trend`, `granularity=week/month` + `metric`, `start/end` tùy chọn trên `ts`, sort `ts ASC` | `week/month` | ✅ khớp (Analysis không ghi `day`) |
 | `GET /api/seasonal` | `seasonal`, `period_type`+`metric`, snapshot, sort `bucket ASC` | 3 period_type, chỉ bucket có quan sát | ✅ khớp |
 | `GET /api/correlation` | `correlation`, snapshot, sort `var_x/var_y`, trả `computed_at` | cặp đối xứng + đường chéo | ✅ khớp |
-| `GET /api/status` | `service_runs` (mới nhất/service) + `data_freshness` | `run_all` trả `success/partial/failed/skipped`; freshness chỉ upsert khi ≥1 bảng ghi mới | ✅ khớp |
+| `GET /api/status` | `service_runs` (mới nhất/service) + `data_freshness` | `run_all` trả `success/partial/failed/skipped`; freshness chỉ upsert khi **cả 5 nhóm** có kết quả mới (Prompt 3 — phương án A) | ✅ khớp |
 
 ### Các quy tắc chung — KHỚP
 
@@ -125,7 +125,7 @@ Analysis **không ghi** `gold.cluster_results`, `gold.forecast_continuous`, `gol
 1. **F1 — Trend chart misalignment (Frontend, `app/analysis/page.tsx:47-55`)**: series mean map theo index thay vì `ts` → đường "Trung bình" lệch ~2 bucket so với đường "Xu hướng". Cần Vũ sửa.
 2. **F2 — Histogram chỉ 3/5 metric**: selector frontend + API enum cho phép 5 → 404 cho `human_share`/`netflows`. Cần nhóm quyết định mở rộng `HISTOGRAM_METRICS` hay giới hạn UI.
 3. **ML timezone/horizon** (đã ghi ở `ml-contract-review.md`): features ML nhóm ngày UTC vs ngày VN của Analysis/API — chờ Hoàng/nhóm chốt.
-4. **Per-table freshness** (ghi nhận từ Task 05): freshness là per-pipeline; bảng có kết quả rỗng giữ snapshot cũ trong khi freshness báo data mới. `gold.correlation.computed_at` là timestamp per-table duy nhất. Nếu cần độ tươi từng bảng → phải đổi schema → quyết định Backend.
+4. **Per-table freshness — ĐÃ XỬ LÝ theo phương án A (Prompt 3):** `data_freshness` chỉ cập nhật khi cả 5 nhóm kết quả đều có dữ liệu mới trong chu kỳ (freshness = mốc Silver của lần ghi "đủ" gần nhất). Khi một nhóm rỗng: các nhóm khác vẫn ghi, bảng rỗng giữ snapshot cũ, freshness giữ nguyên, `run_all` trả `partial`. Phương án B (freshness theo bảng) vẫn là đề xuất cần Backend duyệt — xem §12.
 
 ## 8. Lỗi thuộc Analysis cần sửa
 
@@ -147,3 +147,125 @@ Analysis **không ghi** `gold.cluster_results`, `gold.forecast_continuous`, `gol
 3. Anomaly của Analysis có cần persist/API/UI không → contract riêng.
 4. Per-table freshness trong Gold schema (nếu Backend thấy cần).
 5. Cluster naming/features mapping giữa nhánh ML và UI (`Cao điểm`/`Bất thường`, `http_mean`/`l7_max`/`bot_mean` vs `value`/`dev_7`) — đã ghi trong `ml-contract-review.md` mục 5.
+
+---
+
+## 11. Prompt 3 — Pipeline, Gold Writer & Freshness (cập nhật 2026-11-20)
+
+### 11.1 Luồng dữ liệu thực tế (đã đối chiếu code)
+
+```
+silver.metrics_hourly (warehouse-db)
+  └─ reader.fetch_silver_metrics()          # ĐỌC 1 LẦN / chu kỳ, lọc source='radar'
+       └─ quality.evaluate_data_quality()   # Gate + anomaly (QualityReport)
+            └─ run_all(): cùng 1 DataFrame snapshot cho cả 5 thuật toán
+                 ├─ compute_resampling_records   (day/week/month, giờ VN)
+                 ├─ compute_histogram_records    (3 metric: http_traffic, l7_attack, bot_share)
+                 ├─ compute_trend_records        (week/month, seasonal_decompose)
+                 ├─ compute_temporal_pattern_records (hour_of_day/day_of_week/month → gold.seasonal)
+                 ├─ compute_correlation_records  (Pearson 5×5, cặp đối xứng)
+                 └─ assess_temporal_cycle_completeness() → CHỈ LOG (phương án a)
+            └─ write_all_analysis_results()   # 1 transaction: DELETE+INSERT 5 bảng
+                 └─ _upsert_freshness()        # CHỈ khi cả 5 nhóm đều có kết quả mới
+  └─ gold.* (mart-db) → api (api_user, SELECT-only) → frontend
+```
+
+- `latest_silver_ts` = `df["ts"].max()` của snapshot thực tế (không phải `now()`), timestamp hợp lệ, tz-aware UTC.
+- `run_all` trả `success`/`partial`/`failed` khớp `backend/common/runner.py`; exception DB/đọc Silver → log + `failed`, không ghi Gold.
+- **Entry point duy nhất:** `run_all`. Các hàm `compute_resampled/compute_histogram/compute_trend/compute_temporal_patterns/compute_correlation` và `write_resampled/write_histogram/write_trend/write_temporal_patterns/write_correlation/write_freshness` đơn lẻ đã bị **xóa** (không còn production caller — `git grep` xác nhận chỉ tests dùng). Không còn hai đường chạy bypass gate/snapshot/freshness. `compute_*_records` ở module thuật toán vẫn giữ — đó là hàm tính thuần, chỉ `run_all` gọi trong production.
+
+### 11.2 Gold Writer & Data Freshness
+
+**Kiểm tra writer (bằng code + test):**
+
+| Hạng mục | Kết quả | Bằng chứng |
+|---|---|---|
+| Đúng bảng/cột/kiểu | ✅ | `writer.py` table_specs ↔ `db/mart/init/01-schema.sql` (bảng ở §1) |
+| Timestamp/metric | ✅ | `ts` bucket start giờ VN tz-aware → TIMESTAMPTZ; metric ∈ 5 tên contract |
+| Một transaction | ✅ | `_execute_in_transaction` bọc toàn bộ DELETE+INSERT trong `c.transaction()` |
+| Rollback khi lỗi | ✅ (unit) | exception giữa chừng → transaction abort; test `test_writer.py` assert không partial write |
+| Idempotency | ✅ (unit + E2E) | DELETE+INSERT replace toàn bảng; chạy lại cho cùng kết quả, không trùng dòng (PK bảo đảm) |
+| Không xóa ngoài phạm vi | ✅ | writer chỉ DELETE đúng 5 bảng gold kết quả; không đụng `service_runs`, `cluster_results`, `forecast_*`, silver |
+| Kết quả rỗng | ✅ | `_replace_gold_table` bỏ qua bảng rỗng → giữ snapshot cũ |
+
+**Freshness — vấn đề N1/H1 đã xử lý bằng PHƯƠNG ÁN A (đã triển khai):**
+
+- Trước: `_upsert_freshness` chạy khi **≥1** nhóm có kết quả → consumer tưởng mọi bảng mới trong khi bảng rỗng giữ data cũ.
+- Sau: `_upsert_freshness` chỉ chạy khi **cả 5 nhóm** (`timeseries_resampled`, `histogram`, `trend`, `seasonal`, `correlation`) đều có records mới trong chu kỳ. Một nhóm rỗng → các nhóm khác vẫn ghi, bảng rỗng giữ cũ, freshness giữ nguyên, `run_all` trả `partial`, log liệt kê bảng giữ data cũ.
+- Ngữ nghĩa mới: **freshness = `latest_silver_ts` của lần ghi "đủ" gần nhất** (5/5 nhóm). Đây là thay đổi hành vi trong `services/analysis/` — không đổi schema/API/JSON.
+- Lưu ý hệ quả: nếu histogram vĩnh viễn chỉ có 3/5 metric nhưng vẫn sinh records (metric được hỗ trợ có data), nhóm histogram vẫn "fresh"; chỉ khi TOÀN BỘ histogram rỗng mới chặn freshness.
+
+**So sánh A vs B:**
+
+| | A — đã triển khai | B — đề xuất, chờ duyệt |
+|---|---|---|
+| Cách | Freshness đơn = mốc Silver lần đủ 5/5 gần nhất | Thêm `table_name`/`computed_at` per-table (hoặc nhiều dòng freshness) |
+| Schema | Không đổi | Đổi `db/mart/init/01-schema.sql` + migration cho volume hiện có |
+| API | Không đổi (`/api/status` đọc 1 dòng) | Đổi `services/api/routers/status.py`, `schemas.py`, response shape → breaking hoặc mở rộng |
+| Frontend | Không đổi | Đổi `frontend/` để hiển thị freshness per-table |
+| Thông tin mất | Không biết bảng nào stale khi partial | Biết chính xác độ tươi từng bảng |
+| Rủi ro | Consumer chỉ thấy "freshness = lần đủ gần nhất", phải suy ra bảng stale từ `run status=partial` | Migration + phối hợp 3 module |
+
+**Đề xuất:** giữ A cho hiện tại (đủ chặn false-freshness); cân nhắc B ở Prompt 4+ nếu vận hành cần per-table freshness. File ảnh hưởng nếu làm B: `db/mart/init/01-schema.sql`, `services/api/routers/status.py`, `services/api/schemas.py`, `frontend/` (status UI), migration script cho DB đã init.
+
+### 11.3 Bảng đối chiếu hợp đồng Analysis Output ↔ Gold ↔ API ↔ Frontend
+
+| Analysis Output | Gold Schema | API Schema | Frontend Usage | Status | Bằng chứng |
+|---|---|---|---|---|---|
+| Resampling `day/week/month` | `timeseries_resampled(granularity,ts,metric,mean,min,max)` PK `(granularity,ts,metric)` | `GET /api/timeseries`: granularity+metric bắt buộc, start/end tùy chọn, `limit/offset`, sort `ts ASC` | `getTimeseries` → line chart mean/min/max; granularity selector day/week/month | ✅ Tương thích | `resampling.py`, `writer.py`, `routers/timeseries.py`, `lib/api.ts` |
+| Histogram | `histogram(metric,bin_start,bin_end,count)` — **chỉ 3 metric**: `http_traffic`, `l7_attack`, `bot_share` | `GET /api/histogram`: metric bắt buộc, snapshot (422 nếu start/end) | Selector 5 metric → `human_share`/`netflows` → API 404 → empty-state "chưa có dữ liệu" (đã kiểm `page.tsx`) | ⚠️ Cần nhóm duyệt (F2) | `histogram.py:HISTOGRAM_METRICS`, E2E assert 404 cho 2 metric |
+| Trend `week/month` | `trend(granularity,ts,metric,trend_value)` | `GET /api/trend`: granularity `week/month` + metric | Trend chart; granularity map `month→month`, còn lại `week`; không data → empty state | ✅ Tương thích (F1 misalignment là lỗi FE riêng, không phải contract) | `trend.py`, `routers/analysis.py`, `page.tsx` |
+| Temporal pattern → `gold.seasonal` | `seasonal(period_type,bucket,metric,value)`; month bucket **1..12**, dow **0..6** (T2=0) | `GET /api/seasonal`: period_type+metric, snapshot, sort bucket ASC; `SeasonalPoint` | Label month `T${bucket}` → T1..T12 khớp 1..12; dow `["T2".."CN"][bucket]` khớp 0..6 | ✅ Tương thích | `temporal_patterns.py`, `page.tsx` label code |
+| Correlation 5×5 | `correlation(var_x,var_y,coef,computed_at)` — cặp đối xứng + đường chéo | `GET /api/correlation`: snapshot, trả cả `computed_at` | Heatmap 5×5 lọc `coef !== null`, cặp thiếu → ô trống (không hiển thị sai) | ✅ Tương thích | `correlation.py`, FE heatmap filter null |
+| Freshness/status | `data_freshness(id=1,latest_silver_ts,computed_at)` | `GET /api/status`: `data_freshness` + `service_runs` mới nhất/service | Hiển thị "last updated" từ `data_freshness.latest_silver_ts` + run status | ✅ Tương thích (sau A: freshness = lần đủ 5/5) | `writer._upsert_freshness`, `routers/status.py` |
+| Đơn vị & timezone | `*_share` = % (0..100); metric khác = chỉ số chuẩn hóa (có thể >1 do rescale ingestion) | Trả nguyên giá trị, không đổi đơn vị | Hiển thị raw + format; trục thời gian convert `Asia/Ho_Chi_Minh` | ✅ Tương thích — ghi nhận đơn vị trong docs | `reader.py`, ingestion `rescale.py`, `date-utils.ts` |
+
+### 11.4 Vấn đề đã sửa (Prompt 3)
+
+| # | Vấn đề | Xử lý | File |
+|---|---|---|---|
+| N1/H1 | Freshness cập nhật khi partial write | **Phương án A**: chỉ upsert khi 5/5 nhóm có kết quả; partial → giữ freshness cũ + log bảng giữ data cũ | `writer.py` |
+| M4/N7 | `compute_*`/`write_*` đơn lẻ bypass gate/snapshot/freshness | Xóa toàn bộ (không production caller); `run_all` là entry point duy nhất | `tasks.py`, `writer.py`, tests |
+| — | Log thiếu nhóm bị skip | `run_all` đã log lý do skip theo `algorithm_fitness` (Prompt 2A); writer log bảng giữ data cũ | `tasks.py`, `writer.py` |
+
+### 11.5 Vấn đề cần phối hợp (kèm người liên quan)
+
+| # | Vấn đề | Owner | Trạng thái |
+|---|---|---|---|
+| F2 | Histogram 3/5 metric vs selector 5 metric → 404 (FE đã có empty-state) | Nhóm + Frontend (Vũ) + API | Chờ quyết định: mở rộng `HISTOGRAM_METRICS` hay giới hạn UI |
+| F1 | Trend chart "Trung bình" join theo index → lệch ~2 bucket | Frontend (Vũ) | Bàn giao — không phải lỗi Analysis |
+| B-fresh | Per-table freshness (phương án B) | Backend (Định) + nhóm | Đề xuất — chờ duyệt, chưa implement |
+| Anomaly | `anomaly_samples` chỉ trong `QualityReport` + log, không persist/API | Nhóm | Đề xuất contract riêng nếu muốn hiển thị — chưa implement |
+| ML | timezone/horizon, metric, threshold | Hoàng/nhóm | Theo dõi issue #5/#13 |
+
+### 11.6 Anomaly semantics (ghi nhận)
+
+- `quality.py` phân loại `STATISTICAL_OUTLIER` (Robust Z/IQR thuần thống kê) vs `TRAFFIC_ANOMALY_CANDIDATE` (nghi vấn traffic bất thường — **không phải** tấn công đã xác nhận). Không đổi ngữ nghĩa, không dùng từ "tấn công đã xác nhận".
+- Kết quả anomaly hiện **chỉ nằm trong `QualityReport` và log** của `run_all` — không bảng Gold, không endpoint, Frontend không consume (đã grep: không có `anomal` nào trong `db/mart`, `services/api`, `frontend`).
+- Nhãn "Bất thường" trên dashboard đến từ **Clustering** (`cluster_name == "Bất thường"` trong `gold.cluster_results`) — **nguồn khác nghĩa**, không được dùng chung nhãn với anomaly thống kê của Analysis.
+- Đề xuất (chờ nhóm): nếu muốn hiển thị, cần contract riêng (bảng `gold.anomalies` + endpoint) — không tự thêm.
+
+### 11.7 Test đã chạy — kết quả thực tế
+
+| Suite | Lệnh | Kết quả | Dữ liệu |
+|---|---|---|---|
+| Analysis unit | `bash services/analysis/tests/run.sh` | **111 passed / 0 failed** (7.91s, Docker py3.11) | DataFrame tổng hợp + MagicMock conn; KHÔNG phải Postgres thật |
+| API E2E All-mode | `bash services/api/tests/run.sh all` | **88 passed, 2 skipped** (32.98s tests; stack thật: mart-db + warehouse-db Postgres 16 + Keycloak + analysis/api services) | Postgres `test_*` thật + Silver **tổng hợp** (không phải Radar thật); gồm `test_analysis_pipeline_e2e` chạy Analysis service thật → ghi Gold → đọc lại qua API có auth |
+
+Test mới Prompt 3:
+- `test_freshness_updated_only_when_all_five_groups_present`: cả 5 nhóm → freshness upsert 1 lần; chỉ 1 nhóm → **không** upsert, bảng rỗng không bị DELETE (giữ snapshot cũ).
+- `test_run_all_is_single_entry_point`: assert không còn `compute_*` đơn lẻ.
+- `test_write_all_partial_run_returns_partial_status`: 30h data → trend rỗng → `run_all` trả `partial`, `trend_records=[]`, `latest_silver_ts` = max ts thật.
+- Rollback: `test_writer.py` assert transaction bao toàn bộ; exception → không partial write (MagicMock transaction).
+
+**Chưa kiểm thử được / giới hạn:**
+- Idempotency "chạy 2 lần trên Postgres thật": E2E All-mode đã verify ghi→đọc lại đúng trên Postgres thật (88 passed), nhưng **chưa có test chạy run_all 2 lần liên tiếp** đếm duplicate trên DB thật — DELETE+INSERT replace + PK unique làm trùng lặp không thể xảy ra về mặt cấu trúc, vẫn ghi là "cover gián tiếp".
+- Rollback trên Postgres thật: chưa kiểm thử (unit test dùng MagicMock transaction); rollback path là `c.transaction()` chuẩn psycopg — rủi ro thấp nhưng chưa có bằng chứng DB thật.
+
+### 11.8 Rủi ro còn lại trước Prompt 4
+
+1. Freshness A là "all-or-fresh" ở mức pipeline: một nhóm rỗng kéo freshness về lần đủ gần nhất — nếu histogram mãi chỉ partial metric, freshness vẫn cập nhật (vì nhóm histogram vẫn có records). Chấp nhận được, ghi rõ ngữ nghĩa.
+2. `preview_analysis.py` (untracked, có sẵn từ trước) chưa review — cần quyết định giữ/xóa ở Prompt 4.
+3. Nhiều báo cáo cũ (`TEST_REPORT.md`, `FINAL_REVIEW.md`, `REAL_DATA_VALIDATION.md`…) trùng/lỗi thời — Prompt 4 gộp/xóa.
+4. F2 histogram metric vẫn treo chờ nhóm — ảnh hưởng UX 404→empty-state.
+5. Per-table freshness (B) và anomaly persist là quyết định kiến trúc chưa chốt.

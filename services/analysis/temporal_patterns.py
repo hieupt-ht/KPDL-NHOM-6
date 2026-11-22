@@ -1,4 +1,18 @@
-"""Tính toán tính mùa vụ (Seasonal Analysis) theo giờ trong ngày, thứ trong tuần và tháng."""
+"""Tính trung bình mẫu hình theo thời gian (Temporal Pattern Analysis).
+
+Module này tính giá trị TRUNG BÌNH theo các bucket thời gian:
+- hour_of_day: 0..23 (giờ trong ngày, giờ Việt Nam)
+- day_of_week: 0..6 (0 = Thứ Hai .. 6 = Chủ Nhật, giờ Việt Nam)
+- month: 1..12
+
+Lưu ý quan trọng về ngữ nghĩa:
+- Đây là "bucket averages" — trung bình gom nhóm theo bucket, KHÔNG phải kết luận
+  chuỗi dữ liệu có tính chu kỳ lặp lại (periodicity).
+- Muốn khẳng định mẫu hình lặp lại thật sự, phải dùng thêm
+  assess_temporal_cycle_completeness() để kiểm tra số chu kỳ quan sát độc lập.
+- Kết quả vẫn được ghi vào gold.seasonal và phục vụ endpoint /api/seasonal theo
+  hợp đồng liên module (tên bảng/cột/API giữ nguyên vì tương thích).
+"""
 
 import logging
 from typing import Any
@@ -19,32 +33,33 @@ PERIOD_BUCKETS: tuple[tuple[str, str], ...] = (
 )
 
 
-# Số quan sát hợp lệ tối thiểu cho một metric để được xem là đủ dữ liệu tính trung bình chu kỳ.
-# Một hoặc hai bản ghi đơn lẻ không thể tạo thành chu kỳ lặp lại hay phản ánh tính mùa vụ thực sự.
-MIN_SEASONAL_OBSERVATIONS: int = 3
+# Số quan sát hợp lệ tối thiểu cho một metric để được xem là đủ dữ liệu tính trung bình theo bucket.
+# Một hoặc hai bản ghi đơn lẻ không thể tạo thành mẫu hình theo bucket có ý nghĩa.
+MIN_TEMPORAL_PATTERN_OBSERVATIONS: int = 3
 
 
-def check_seasonal_cycle_completeness(
+def assess_temporal_cycle_completeness(
     df: pd.DataFrame,
     tz_name: str | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Kiểm tra độ đầy đủ theo chu kỳ (cycle completeness & periodicity) cho từng metric.
+    """Đánh giá độ đầy đủ chu kỳ và khả năng lặp lại cho từng metric.
 
-    Quy định kiểm tra:
-    - hour_of_day: Có đủ 24 giờ (0..23) hay không.
-    - day_of_week: Có đủ 7 ngày trong tuần (0..6) hay không.
-    - month: Có đủ 12 tháng (1..12) hay không.
-    - Phân biệt giá trị trung bình theo bucket và tính mùa vụ thực sự có chu kỳ lặp lại:
-      Để xác nhận tính mùa vụ (confirmed = True), chuỗi cần có đủ các bucket trong chu kỳ
-      và chu kỳ đó phải lặp lại ít nhất 2 lần (cycle_count >= 2).
-    - Thể hiện rõ hạn chế khi dữ liệu chưa đủ 12 tháng hoặc chưa quan sát qua nhiều năm
-      đối với chu kỳ tháng.
+    Đây là đánh giá "cycle completeness & periodicity", tách biệt với phép tính
+    trung bình bucket của compute_temporal_pattern_records().
 
-    Trả về dict tương thích ngược:
-        result[metric]["hour_of_day"]: bool (True nếu đủ 24 giờ)
-        result[metric]["day_of_week"]: bool (True nếu đủ 7 ngày)
-        result[metric]["month"]: bool (True nếu đủ 12 tháng)
-        result[metric]["cycle_details"]: thông tin chi tiết độ phủ, số chu kỳ và xác nhận mùa vụ.
+    Điều kiện "đã xác nhận lặp lại" (confirmed = True) theo từng loại chu kỳ:
+    - hour_of_day: đủ 24 giờ (0..23) VÀ mỗi giờ xuất hiện trong >= 2 NGÀY khác nhau.
+    - day_of_week: đủ 7 thứ (0..6) VÀ mỗi thứ xuất hiện trong >= 2 TUẦN ISO khác nhau.
+    - month: đủ 12 tháng (1..12) VÀ mỗi tháng xuất hiện trong >= 2 NĂM khác nhau.
+
+    cycle_count đếm số chu kỳ quan sát ĐỘC LẬP (ngày/tuần ISO/năm khác nhau),
+    KHÔNG suy ra từ "số quan sát chia cho độ dài chu kỳ" vì dữ liệu có khoảng
+    trống sẽ làm con số đó bị thổi phồng.
+
+    Trả về dict:
+        result[metric][period_type]: bool — True nếu đủ các bucket trong chu kỳ.
+        result[metric]["cycle_details"][period_type]: chi tiết coverage,
+        số chu kỳ, số lần lặp tối thiểu/tối đa và cờ confirmed.
     """
     if df.empty or "ts" not in df.columns or "metric" not in df.columns or "value" not in df.columns:
         return {}
@@ -73,8 +88,8 @@ def check_seasonal_cycle_completeness(
         hour_rep = m_group.groupby("bucket_hour")["date_local"].nunique()
         hour_min_rep = int(hour_rep.min()) if not hour_rep.empty else 0
         hour_max_rep = int(hour_rep.max()) if not hour_rep.empty else 0
-        # Số chu kỳ hoàn chỉnh: tính theo số quan sát chia cho độ dài chu kỳ 24
-        hour_cycles = max(1, len(m_group) // 24) if len(m_group) >= 24 else 0
+        # Số chu kỳ = số NGÀY khác nhau có quan sát (không phải len/24)
+        hour_cycles = int(m_group["date_local"].nunique())
         hour_confirmed = hour_complete and (hour_min_rep >= 2)
 
         # Day of week (chu kỳ 7 ngày)
@@ -84,14 +99,15 @@ def check_seasonal_cycle_completeness(
         dow_rep = m_group.groupby("bucket_dow")["week_local"].nunique()
         dow_min_rep = int(dow_rep.min()) if not dow_rep.empty else 0
         dow_max_rep = int(dow_rep.max()) if not dow_rep.empty else 0
-        distinct_days = m_group["date_local"].nunique()
-        dow_cycles = max(1, distinct_days // 7) if distinct_days >= 7 else 0
+        # Số chu kỳ = số TUẦN ISO khác nhau có quan sát
+        dow_cycles = int(m_group["week_local"].nunique())
         dow_confirmed = dow_complete and (dow_min_rep >= 2)
 
         # Month (chu kỳ 12 tháng)
         # Mỗi tháng phải xuất hiện trong >= 2 năm khác nhau.
         unique_months = set(m_group["bucket_month"].unique())
         month_complete = len(unique_months) == 12
+        # Số chu kỳ = số NĂM khác nhau có quan sát
         month_cycles = int(m_group["year_local"].nunique())
         month_rep = m_group.groupby("bucket_month")["year_local"].nunique()
         month_min_rep = int(month_rep.min()) if not month_rep.empty else 0
@@ -100,8 +116,9 @@ def check_seasonal_cycle_completeness(
         month_limitation = None
         if not month_confirmed:
             month_limitation = (
-                f"Chưa đủ dữ liệu để xác nhận tính mùa vụ theo tháng (hiện có {len(unique_months)}/12 tháng "
-                f"qua {month_cycles} năm; cần đủ 12 tháng qua ít nhất 2 năm)."
+                f"Chưa đủ dữ liệu để xác nhận mẫu hình lặp lại theo tháng "
+                f"(hiện có {len(unique_months)}/12 tháng qua {month_cycles} năm; "
+                f"cần đủ 12 tháng, mỗi tháng xuất hiện trong ít nhất 2 năm)."
             )
 
         result[m_str] = {
@@ -142,28 +159,31 @@ def check_seasonal_cycle_completeness(
     return result
 
 
-def compute_seasonal_records(
+def compute_temporal_pattern_records(
     df: pd.DataFrame,
     tz_name: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Tính trung bình giá trị các chỉ số theo bucket mùa vụ (bucket averages).
+    """Tính giá trị trung bình các chỉ số theo bucket thời gian (bucket averages).
 
-    Các chu kỳ bucket:
+    Các bucket:
     - hour_of_day: 0 đến 23
     - day_of_week: 0 đến 6 (0 = Thứ Hai, 6 = Chủ Nhật)
     - month: 1 đến 12
 
-    Lưu ý:
-    - Phép tính này cung cấp giá trị trung bình gom nhóm theo bucket (bucket averages),
-      không đồng nghĩa với việc chuỗi dữ liệu đã được xác nhận có tính chu kỳ mùa vụ (periodicity).
-    - Tính mùa vụ thực sự cần được đánh giá kết hợp với check_seasonal_cycle_completeness().
+    Lưu ý về ngữ nghĩa:
+    - Kết quả là TRUNG BÌNH THEO BUCKET, không phải kết luận chuỗi dữ liệu đã có
+      tính chu kỳ lặp lại. Muốn khẳng định "mẫu hình lặp lại" phải tham khảo
+      assess_temporal_cycle_completeness().
+    - Kết quả được ghi vào gold.seasonal theo hợp đồng liên module (tên bảng/API
+      giữ nguyên vì tương thích với api/frontend).
 
     Quy định:
     - Chuyển timestamp sang múi giờ chuẩn Asia/Ho_Chi_Minh trước khi tính.
     - Tuần bắt đầu từ thứ Hai (dayofweek == 0).
     - Xử lý timestamp trùng lặp qua phép tính trung bình mốc giờ trước khi phân phối vào bucket.
     - Xử lý khoảng thời gian thiếu: không tự tạo giá trị giả cho bucket không có dữ liệu.
-    - Kiểm tra số lượng dữ liệu: không kết luận hay tính toán khi metric có ít hơn MIN_SEASONAL_OBSERVATIONS (3) quan sát.
+    - Kiểm tra số lượng dữ liệu: không tính khi metric có ít hơn
+      MIN_TEMPORAL_PATTERN_OBSERVATIONS (3) quan sát.
     - Bỏ qua các giá trị NULL, NaN, Infinity.
     """
     if df.empty or "ts" not in df.columns or "metric" not in df.columns or "value" not in df.columns:
@@ -186,18 +206,24 @@ def compute_seasonal_records(
 
     # Kiểm tra số lượng dữ liệu theo từng metric: loại bỏ metric không đủ quan sát tối thiểu
     metric_counts = dedup_df.groupby("metric")["value"].count()
-    eligible_metrics = set(metric_counts[metric_counts >= MIN_SEASONAL_OBSERVATIONS].index)
+    eligible_metrics = set(
+        metric_counts[metric_counts >= MIN_TEMPORAL_PATTERN_OBSERVATIONS].index
+    )
 
-    ineligible_metrics = set(metric_counts[metric_counts < MIN_SEASONAL_OBSERVATIONS].index)
+    ineligible_metrics = set(
+        metric_counts[metric_counts < MIN_TEMPORAL_PATTERN_OBSERVATIONS].index
+    )
     if ineligible_metrics:
         log.info(
-            "Bỏ qua các metric không đủ dữ liệu tính mùa vụ (< %d quan sát): %s",
-            MIN_SEASONAL_OBSERVATIONS,
+            "Bỏ qua các metric không đủ dữ liệu tính mẫu hình thời gian (< %d quan sát): %s",
+            MIN_TEMPORAL_PATTERN_OBSERVATIONS,
             ineligible_metrics,
         )
 
     if not eligible_metrics:
-        log.warning("Không có metric nào đủ điều kiện quan sát tối thiểu để tính mùa vụ.")
+        log.warning(
+            "Không có metric nào đủ điều kiện quan sát tối thiểu để tính mẫu hình thời gian."
+        )
         return []
 
     dedup_df = dedup_df[dedup_df["metric"].isin(eligible_metrics)].copy()
@@ -219,5 +245,5 @@ def compute_seasonal_records(
                     "value": val,
                 })
 
-    log.info("Tính toán seasonal thành công: %d bản ghi", len(records))
+    log.info("Tính mẫu hình thời gian thành công: %d bản ghi", len(records))
     return records

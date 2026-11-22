@@ -5,7 +5,7 @@ Dịch vụ phân tích thống kê chuỗi thời gian an ninh mạng (Việt N
 ## 1. Vai trò trong hệ thống
 
 - **Đọc:** `silver.metrics_hourly` (Data Warehouse - PostgreSQL `warehouse-db`).
-- **Xử lý:** Làm sạch, kiểm tra chất lượng, tổng hợp thống kê, tách xu hướng, phân tích mùa vụ, tương quan Pearson và phát hiện bất thường.
+- **Xử lý:** Làm sạch, kiểm tra chất lượng, tổng hợp thống kê, tách xu hướng, phân tích mẫu hình theo thời gian (temporal pattern), tương quan Pearson và phát hiện bất thường.
 - **Ghi:** Tầng `gold` (Data Mart - PostgreSQL `mart-db`) sẵn sàng cho Backend API và Dashboard trực quan hóa.
 - **Chu kỳ:** Mặc định chạy tự động mỗi 300 giây (5 phút) qua APScheduler hoặc nhận kích hoạt thủ công qua `POST /run`.
 
@@ -31,17 +31,18 @@ Dịch vụ phân tích thống kê chuỗi thời gian an ninh mạng (Việt N
    - Loại bỏ các giá trị `NaN` ở đầu và cuối trend. Bỏ qua an toàn khi dữ liệu không đủ 2 chu kỳ.
    - Lưu vào: `gold.trend`.
 
-4. **Seasonal Analysis (`seasonal.py`):**
-   - Tính trung bình quan sát theo 3 chu kỳ:
+4. **Temporal Pattern Analysis (`temporal_patterns.py`):**
+   - Tính giá trị TRUNG BÌNH theo 3 bucket thời gian (bucket averages — chưa phải kết luận chu kỳ lặp lại):
      - `hour_of_day`: 0–23
      - `day_of_week`: 0–6 (0 là Thứ Hai, 6 là Chủ Nhật)
      - `month`: 1–12
    - Múi giờ địa phương `Asia/Ho_Chi_Minh`.
-   - Lưu vào: `gold.seasonal`.
+   - `assess_temporal_cycle_completeness()` đánh giá riêng khả năng lặp lại (mỗi bucket phải lặp ở ≥ 2 chu kỳ độc lập: ngày/tuần ISO/năm); kết quả chỉ ghi log vận hành.
+   - Lưu vào: `gold.seasonal` (tên bảng giữ nguyên vì hợp đồng API/frontend).
 
 5. **Correlation Analysis (`correlation.py`):**
    - Tính ma trận tương quan Pearson giữa 5 chỉ số: `http_traffic`, `l7_attack`, `bot_share`, `human_share`, `netflows`.
-   - Căn chỉnh dữ liệu theo timestamp; xử lý thiếu theo từng cặp (pairwise complete, $N \ge 2$).
+   - Căn chỉnh dữ liệu theo timestamp; xử lý thiếu theo từng cặp (pairwise complete, $N \ge 3$).
    - Bỏ qua các cặp có zero-variance; không thay thế giá trị không xác định bằng 0.
    - Đảm bảo tính đối xứng $r(x, y) = r(y, x)$ và $r \in [-1.0, 1.0]$.
    - Lưu vào: `gold.correlation`.
@@ -69,8 +70,8 @@ services/analysis/
 ├── quality.py                   # Data quality và anomaly detection
 ├── resampling.py                # Tổng hợp Day, Week, Month
 ├── histogram.py                 # 20 bins histogram
-├── trend.py                     # Seasonal decomposition trend
-├── seasonal.py                  # Chu kỳ giờ, thứ, tháng
+├── trend.py                     # Trend decomposition (statsmodels)
+├── temporal_patterns.py         # Trung bình theo giờ, thứ, tháng (temporal pattern)
 ├── correlation.py               # Ma trận tương quan Pearson
 ├── writer.py                    # Ghi nguyên tử vào Data Mart
 ├── README.md                    # Tài liệu kỹ thuật dịch vụ
@@ -84,7 +85,7 @@ services/analysis/
     ├── test_resampling.py
     ├── test_histogram.py
     ├── test_trend.py
-    ├── test_seasonal.py
+    ├── test_temporal_patterns.py
     ├── test_correlation.py
     ├── test_writer.py
     ├── test_tasks.py
@@ -122,7 +123,7 @@ uvicorn main:app --host 0.0.0.0 --port 8001
 
 ### Chạy kiểm thử tự động (Pytest)
 ```bash
-# Chạy toàn bộ 70 bài test
+# Chạy toàn bộ test
 pytest services/analysis/tests -v
 
 # Chạy test trong môi trường Docker cô lập
