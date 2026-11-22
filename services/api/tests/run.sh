@@ -15,10 +15,10 @@ for service in "${IMAGES[@]}"; do "${COMPOSE[@]}" build "$service"; done
 if [[ "$MODE" == all ]]; then
   "${COMPOSE[@]}" up --no-build --abort-on-container-exit --exit-code-from tests
 else
-  MARKER='not integration and not keycloak'
+  MARKER='not integration and not stack'
   if [[ "$MODE" == integration ]]; then
     "${COMPOSE[@]}" up --detach --wait mart-db warehouse-db
-    MARKER='not keycloak'
+    MARKER='not stack'
   fi
   "${COMPOSE[@]}" run --rm --no-deps tests python -m pytest -c pytest.ini tests -q -p no:cacheprovider -m "$MARKER"
 fi

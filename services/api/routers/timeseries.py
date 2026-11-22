@@ -2,14 +2,14 @@
 
 from typing import Annotated
 
-from auth import require_user
-from dependencies import Page, TimeRange, get_mart
 from fastapi import APIRouter, Depends, Response
 from psycopg import Connection, sql
+
+from dependencies import Page, TimeRange, get_mart
 from repository import read_rows, require_rows, time_conditions
 from schemas import Granularity, Metric, TimeseriesPoint
 
-router = APIRouter(dependencies=[Depends(require_user)], tags=["Timeseries"])
+router = APIRouter(tags=["Timeseries"])
 
 
 @router.get("/timeseries", response_model=list[TimeseriesPoint])

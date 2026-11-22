@@ -1,8 +1,14 @@
-# Chạy và kiểm tra Backend API bằng Docker
+# Chạy và kiểm thử Backend API
 
-Theo CLAUDE.md, chỉ cần Git, Docker Engine và Docker Compose; không cần Python, Node hoặc venv trên máy. Chạy từ thư mục gốc repo.
+Dashboard/API không cần đăng nhập, Bearer token, NextAuth hoặc Keycloak. Mở http://localhost:3000 vào thẳng Tổng quan; trang /admin và Jobs API dùng trực tiếp. Stack có 8 service.
 
-## Kiểm thử độc lập với dữ liệu dự án
+## Chạy
+
+Tại thư mục gốc: tạo .env từ .env.example nếu chưa có, cấu hình database/CF_API_TOKEN rồi chạy `docker compose up -d --build`. Giữ volume dữ liệu khi cập nhật. Có thể giữ .env cũ: các biến AUTH_ENABLED/KEYCLOAK/NEXTAUTH không còn được dùng. NEXT_PUBLIC_DATA_MODE mặc định api; rebuild frontend khi đổi biến public.
+
+API: http://localhost:8000/docs. /health kiểm tra tiến trình, /ready kiểm tra Mart và schema. Các GET Gold trả 404 khi chưa có dữ liệu; /api/status trống vẫn 200. Không cần cấu hình tài khoản hoặc cổng 8080.
+
+## Kiểm thử Docker
 
 ```powershell
 ./services/api/tests/run.ps1 -Mode Unit
@@ -10,39 +16,14 @@ Theo CLAUDE.md, chỉ cần Git, Docker Engine và Docker Compose; không cần 
 ./services/api/tests/run.ps1 -Mode All
 ```
 
-Bash/Linux/Git Bash:
+Linux: `bash services/api/tests/run.sh unit|integration|all`. Unit kiểm tra validation/transport, Integration thêm PostgreSQL, All thêm các service và Analysis E2E. Hai bài frontend chạy riêng trong CI smoke vì cần frontend thực.
 
-```bash
-bash services/api/tests/run.sh unit
-bash services/api/tests/run.sh integration
-bash services/api/tests/run.sh all
-```
+Bộ test dùng DB test_* và network riêng, không đọc .env dự án hoặc gọi Cloudflare. Runner chỉ dọn tài nguyên project kpdl-api-tests-* của nó. Không dùng down -v trên ứng dụng để chạy test.
 
-| Mode | Phạm vi |
-| --- | --- |
-| Unit | Validation, JWT/JWKS với khóa ký kiểm thử, phân quyền, lỗi và proxy job; không chạy DB/Keycloak |
-| Integration | Unit + PostgreSQL thật: query, quyền api_user, read-only transaction, runner/journal/lock |
-| All | Toàn bộ các phần trên + đăng nhập Authorization Code/PKCE với Keycloak thật, API và 3 service thật |
+## Chạy job
 
-Runner tự build image lần lượt, tạo project `kpdl-api-tests-*`, kiểm tra và dọn project đó. Lần đầu cần Internet để tải image/package; lần sau Docker dùng cache. Không cần .env, CF_API_TOKEN hoặc mật khẩu thật. Các giá trị test-only trong compose.yml chỉ dành cho mạng Docker nội bộ, không publish port ra host. PostgreSQL dùng tmpfs; dừng container là mất dữ liệu kiểm thử. Các volume Warehouse/Mart của ứng dụng không được mount hay xóa.
+POST /api/jobs/{analysis|clustering|prediction}/run không cần tài khoản, trả 202 + run_id. Poll /api/jobs/runs/{run_id} đến trạng thái cuối; /api/status chỉ là tổng hợp mới nhất. API gửi X-Job-Token nội bộ, phải khớp JOB_TRIGGER_TOKEN ở logic service; browser không biết token này.
 
-All kiểm tra hợp đồng kích hoạt, quyền và nhật ký, không đánh giá thuật toán Analysis/ML. Một job có thể kết thúc success, failed, partial hoặc skipped; test yêu cầu trạng thái cuối hợp lệ và timestamp tương ứng. Với các task còn stub, journal phải phản ánh failed, không sinh dữ liệu giả làm kết quả thật. Tests của thuật toán thuộc module tương ứng.
+Giữ allow-list URL, khóa scheduler/manual giữa worker, một journal/lần, không retry POST khi timeout. Chạy job không đồng nghĩa huấn luyện model; thiếu artifact hoặc task chưa triển khai có thể failed, thiếu dữ liệu có thể skipped. Chỉ API dùng quyền SELECT Gold, các logic service mới ghi kết quả.
 
-Exit code khác 0 nghĩa build/startup/test thất bại. Script dọn tài nguyên trong finally/trap, kể cả khi test lỗi. `-ProjectName kpdl-api-tests-<tên>` có thể đặt tên riêng trên PowerShell; chỉ nhận prefix kiểm thử. `-Keep` giữ container để xem log nhưng không bảo đảm dữ liệu tmpfs tồn tại sau khi container đã dừng. Dọn bằng chính file compose kiểm thử và đúng project đã in ra, không dùng down -v cho ứng dụng.
-
-## Chạy ứng dụng để tích hợp
-
-1. Chuẩn bị .env từ .env.example nếu chưa có; giữ các cấu hình thật hiện có, chỉ bổ sung biến mới.
-2. Điền token Cloudflare và mật khẩu; đặt AUTH_ENABLED=true khi kiểm tra xác thực. Có thể tắt SCHEDULER_ENABLED trong lúc kiểm tra thao tác thủ công.
-3. Chạy `docker compose up -d --build` theo README. Môi trường này độc lập với bộ test ở trên.
-
-- Swagger: http://localhost:8000/docs
-- Liveness: http://localhost:8000/health
-- Mart/schema readiness: http://localhost:8000/ready
-- User/role: GET /api/me với access token khi bật auth.
-- Bảng Gold cần dữ liệu từ Analysis/ML; dữ liệu trống trả 404 là hành vi dự kiến.
-- Timeout kết nối/truy vấn và URL JWKS nội bộ đã được ánh xạ trong Compose. Không đổi issuer công khai thành tên container.
-
-Chi tiết hợp đồng: [api-contract.md](api-contract.md). JWT/Keycloak và job: [backend-auth-jobs.md](backend-auth-jobs.md). Điểm cần phối hợp với frontend/Analysis/ML: [backend-integration-handoff.md](backend-integration-handoff.md).
-
-CI dùng `.github/workflows/backend-api.yml` để chạy cùng bộ All cho PR backend vào develop; không cần secret của nhóm. CI chạy thêm `bash services/api/tests/smoke-compose.sh` để build/khởi động đủ 9 container theo Compose ứng dụng với cấu hình giả và scheduler tắt. Bước smoke kiểm tra frontend HTTP, Mart readiness, Keycloak và API yêu cầu token; nó không thay thế nghiệm thu Auth.js/dashboard hoặc pipeline Cloudflare → Silver → Analysis/ML → Gold thật. Smoke publish các port ứng dụng trên host, nên chỉ chạy trên host kiểm thử riêng, không chạy cạnh hệ thống đang sử dụng cùng port.
+Việc gỡ đăng nhập là thay đổi phạm vi: mọi người truy cập được dashboard cũng dùng được chức năng Vận hành. Schema Gold/Medallion không thay đổi.

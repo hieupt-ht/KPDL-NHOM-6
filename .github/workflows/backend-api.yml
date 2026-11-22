@@ -59,7 +59,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-      - name: Run isolated PostgreSQL, Keycloak and API tests in Docker
+      - name: Run isolated PostgreSQL and API tests in Docker
         run: bash services/api/tests/run.sh all
-      - name: Smoke test all 9 application containers with fake configuration
+      - name: Smoke test all 8 application containers with fake configuration
         run: bash services/api/tests/smoke-compose.sh

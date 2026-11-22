@@ -1,3 +1,5 @@
+> Cập nhật 22/11/2026: đã gỡ đăng nhập/Keycloak/Viewer/Admin theo yêu cầu chủ dự án. Các hướng dẫn xác thực và số lượng container bên dưới là ghi nhận lịch sử; cách chạy hiện tại ở [frontend-live-integration.md](frontend-live-integration.md). Stack hiện có 8 service, dashboard/API truy cập trực tiếp, chỉ /run nội bộ dùng token.
+
 # Nghiệm thu Analysis → Gold → API → Dashboard
 
 Nhánh tích hợp từ develop `0e6adc7` (20/11/2026). Analysis đã có trong develop qua PR #15; Clustering/Prediction thật vẫn nằm trên nhánh ML, không tự merge vào đây.

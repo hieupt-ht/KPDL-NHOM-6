@@ -1,9 +1,0 @@
-# Test-only override: isolated in-memory Keycloak, small heap and thread count.
-# Use with -p cyber-radar-auth-test and a test-only --env-file.
-services:
-  keycloak:
-    command: start-dev --db=dev-mem --import-realm
-    mem_limit: 512m
-    environment:
-      JAVA_OPTS_KC_HEAP: "-Xms64m -Xmx256m"
-      JAVA_OPTS_APPEND: "-XX:ActiveProcessorCount=2"

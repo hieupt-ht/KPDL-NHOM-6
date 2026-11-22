@@ -1,26 +1,12 @@
-import { getSession } from "next-auth/react";
-import type { Session } from "next-auth";
 import type { AcceptedJob, ClusterResult, CorrelationPoint, DateRange, ForecastContinuous, ForecastDiscrete, HistogramBin, Metric, SeasonalPoint, ServiceRun, StatusResponse, TimeseriesPoint, TrendPoint } from "@/types/api";
 import * as demo from "@/lib/demo-data";
 import { ApiError, createApiTransport } from "./api-core";
 
 export { ApiError } from "./api-core";
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-export const DATA_MODE = process.env.NEXT_PUBLIC_DATA_MODE === "api" ? "api" : "demo";
+export const DATA_MODE = process.env.NEXT_PUBLIC_DATA_MODE === "demo" ? "demo" : "api";
 export const DATA_REFRESH_INTERVAL = DATA_MODE === "demo" ? 8_000 : 300_000;
-let sessionRequest: Promise<Session | null> | undefined;
-
-export function clearAuthCache() { sessionRequest = undefined; }
-export async function getAccessToken(): Promise<string | null> {
-  if (!sessionRequest) {
-    const pending = getSession();
-    sessionRequest = pending;
-    void pending.finally(() => { if (sessionRequest === pending) sessionRequest = undefined; }).catch(() => {});
-  }
-  const session = await sessionRequest;
-  return session?.error ? null : session?.accessToken ?? null;
-}
-const api = createApiTransport({ baseUrl: API_BASE_URL, getToken: getAccessToken });
+const api = createApiTransport({ baseUrl: API_BASE_URL });
 
 export function getTimeseries(q: DateRange & { granularity: "day" | "week" | "month"; metric: Metric }): Promise<TimeseriesPoint[]> {
   return DATA_MODE === "demo" ? Promise.resolve(demo.timeseries(q)) : api.list("timeseries", { ...api.range(q), metric: q.metric, granularity: q.granularity });

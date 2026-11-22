@@ -118,4 +118,4 @@ Tên service hợp lệ: `ingestion`, `analysis`, `clustering`, `prediction`, `a
 
 - Mỗi service Python có `requirements.txt` riêng và tạo `venv` riêng khi chạy ngoài Docker.
 - Frontend dùng một trình quản lý gói thống nhất cho cả nhóm (ví dụ `npm`) — **chỉ commit một** file lock (`package-lock.json`).
-- Khi phát triển phần khác chưa cần đăng nhập: đặt `AUTH_ENABLED=false` trong `.env`.
+- Dashboard/API truy cập trực tiếp, không cấu hình đăng nhập. JOB_TRIGGER_TOKEN là token nội bộ chung giữa API và logic service, không đưa ra frontend.
