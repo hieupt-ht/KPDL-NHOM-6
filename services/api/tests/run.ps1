@@ -20,11 +20,11 @@ try {
     if ($Mode -eq 'All') {
         & docker @composeArgs up --no-build --abort-on-container-exit --exit-code-from tests
     } else {
-        $marker = 'not integration and not keycloak'
+        $marker = 'not integration and not stack'
         if ($Mode -eq 'Integration') {
             & docker @composeArgs up --detach --wait mart-db warehouse-db
             if ($LASTEXITCODE -ne 0) { throw 'Test PostgreSQL is not ready' }
-            $marker = 'not keycloak'
+            $marker = 'not stack'
         }
         & docker @composeArgs run --rm --no-deps tests python -m pytest -c pytest.ini tests -q -p no:cacheprovider -m $marker
     }

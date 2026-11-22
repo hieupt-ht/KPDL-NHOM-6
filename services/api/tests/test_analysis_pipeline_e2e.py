@@ -1,4 +1,4 @@
-"""Run the actual Analysis service, then read its Gold output through authenticated API."""
+"""Run the actual Analysis service, then read its Gold output through open API."""
 
 import os
 import time
@@ -7,7 +7,6 @@ import httpx
 import psycopg
 import pytest
 from psycopg.conninfo import conninfo_to_dict
-from test_keycloak_e2e import keycloak_stack  # noqa: F401 - pytest fixture
 
 
 @pytest.fixture
@@ -50,36 +49,25 @@ def silver_fixture(mart):
         warehouse.execute("TRUNCATE silver.metrics_hourly")
 
 
-@pytest.mark.keycloak
+@pytest.mark.stack
 def test_analysis_job_writes_gold_and_api_reads_actual_results(
-    request, silver_fixture, mart
+    silver_fixture, mart
 ):
-    api, login = request.getfixturevalue("keycloak_stack")
-    admin = login("admin", os.environ["TEST_KEYCLOAK_ADMIN_PASSWORD"])
-    viewer = login("demo", os.environ["TEST_KEYCLOAK_DEMO_PASSWORD"])
-    admin_headers = {"Authorization": "Bearer " + admin["access_token"]}
-    viewer_headers = {"Authorization": "Bearer " + viewer["access_token"]}
+    api = os.environ["TEST_API_URL"]
     with httpx.Client(timeout=30, trust_env=False) as client:
-        assert (
-            client.post(
-                api + "/api/jobs/analysis/run", headers=viewer_headers
-            ).status_code
-            == 403
-        )
         assert (
             client.get(
                 api + "/api/timeseries",
                 params={"metric": "http_traffic", "granularity": "day"},
-                headers=viewer_headers,
             ).status_code
             == 404
         )
-        accepted = client.post(api + "/api/jobs/analysis/run", headers=admin_headers)
+        accepted = client.post(api + "/api/jobs/analysis/run")
         assert accepted.status_code == 202
         run_id = accepted.json()["run_id"]
         deadline = time.monotonic() + 60
         while True:
-            result = client.get(api + f"/api/jobs/runs/{run_id}", headers=admin_headers)
+            result = client.get(api + f"/api/jobs/runs/{run_id}")
             assert result.status_code == 200
             row = result.json()
             if row["status"] != "running" or time.monotonic() >= deadline:
@@ -95,7 +83,7 @@ def test_analysis_job_writes_gold_and_api_reads_actual_results(
         )
         params = {"metric": "http_traffic", "granularity": "day", "limit": 3}
         page = client.get(
-            api + "/api/timeseries", params=params, headers=viewer_headers
+            api + "/api/timeseries", params=params
         )
         assert page.status_code == 200
         assert len(page.json()) == 3
@@ -105,7 +93,6 @@ def test_analysis_job_writes_gold_and_api_reads_actual_results(
         next_page = client.get(
             api + "/api/timeseries",
             params={**params, "offset": 3},
-            headers=viewer_headers,
         )
         assert next_page.status_code == 200
         assert next_page.json()[0]["ts"] > page.json()[-1]["ts"]
@@ -116,14 +103,13 @@ def test_analysis_job_writes_gold_and_api_reads_actual_results(
             ("correlation", {}),
         ]:
             response = client.get(
-                api + "/api/" + endpoint, params=query, headers=viewer_headers
+                api + "/api/" + endpoint, params=query
             )
             assert response.status_code == 200, (endpoint, response.text)
             assert response.json()
         histogram = client.get(
             api + "/api/histogram",
             params={"metric": "http_traffic"},
-            headers=viewer_headers,
         ).json()
         assert sum(bin["count"] for bin in histogram) == 84 * 24
         for metric in ("human_share", "netflows"):
@@ -131,7 +117,6 @@ def test_analysis_job_writes_gold_and_api_reads_actual_results(
                 client.get(
                     api + "/api/histogram",
                     params={"metric": metric},
-                    headers=viewer_headers,
                 ).status_code
                 == 404
             )
@@ -139,11 +124,10 @@ def test_analysis_job_writes_gold_and_api_reads_actual_results(
             client.get(
                 api + "/api/histogram",
                 params={"metric": "http_traffic", "start": "2026-08-02T00:00:00+07:00"},
-                headers=viewer_headers,
             ).status_code
             == 422
         )
-        status = client.get(api + "/api/status", headers=viewer_headers).json()
+        status = client.get(api + "/api/status").json()
         assert status["data_freshness"]["latest_silver_ts"].startswith(
             "2026-10-24T16:00:00"
         )

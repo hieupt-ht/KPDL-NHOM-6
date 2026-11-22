@@ -17,7 +17,6 @@ def logic(mart, monkeypatch):
         pytest.skip("Set TEST_MART_LOGIC_DSN to test the Business Logic writer")
     monkeypatch.setattr(settings, "mart_dsn", dsn)
     monkeypatch.setattr(settings, "scheduler_enabled", False)
-    monkeypatch.setattr(settings, "auth_enabled", True)
     monkeypatch.setattr(settings, "job_trigger_token", SecretStr("runner-test-token"))
     return mart
 
@@ -145,7 +144,6 @@ def test_scheduled_job_is_logged_and_returns_result(logic):
 
 def test_internal_endpoint_requires_shared_secret(monkeypatch):
     monkeypatch.setattr(settings, "scheduler_enabled", False)
-    monkeypatch.setattr(settings, "auth_enabled", True)
     monkeypatch.setattr(settings, "job_trigger_token", SecretStr("runner-test-token"))
     app = make_app(lambda: pytest.fail("Unauthorized job executed"))
     with TestClient(app) as client:
@@ -157,7 +155,6 @@ def test_internal_endpoint_requires_shared_secret(monkeypatch):
 
 def test_db_unavailable_does_not_accept_job(monkeypatch):
     monkeypatch.setattr(settings, "scheduler_enabled", False)
-    monkeypatch.setattr(settings, "auth_enabled", False)
     monkeypatch.setattr(settings, "job_trigger_token", SecretStr(""))
     monkeypatch.setattr(settings, "mart_dsn", "")
     app = make_app(lambda: pytest.fail("Job should not run without its journal"))

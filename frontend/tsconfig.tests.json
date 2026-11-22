@@ -4,5 +4,5 @@
     "moduleResolution": "node", "strict": true, "esModuleInterop": true,
     "skipLibCheck": true, "outDir": ".test-build", "types": ["node"]
   },
-  "include": ["tests/*.test.ts", "types/next-auth.d.ts"]
+  "include": ["tests/*.test.ts"]
 }

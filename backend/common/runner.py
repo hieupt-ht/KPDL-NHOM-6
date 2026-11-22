@@ -29,7 +29,7 @@ class JobUnavailable(Exception):
 
 def require_job_token(x_job_token: Annotated[str | None, Header()] = None) -> None:
     expected = settings.job_trigger_token.get_secret_value()
-    if settings.auth_enabled and not expected:
+    if not expected:
         raise HTTPException(503, "Internal job authentication is not configured")
     if expected and not hmac.compare_digest(
         expected.encode(), (x_job_token or "").encode()

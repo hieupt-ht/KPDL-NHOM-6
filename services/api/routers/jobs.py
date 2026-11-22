@@ -3,15 +3,15 @@
 from typing import Annotated, Literal
 
 import httpx
-from auth import require_admin
 from common.config import settings
-from dependencies import get_mart
 from fastapi import APIRouter, Depends, HTTPException, Path
 from psycopg import Connection
 from pydantic import BaseModel, ValidationError
+
+from dependencies import get_mart
 from schemas import ServiceRun
 
-router = APIRouter(dependencies=[Depends(require_admin)], tags=["Jobs"])
+router = APIRouter(tags=["Jobs"])
 
 
 class AcceptedJob(BaseModel):
@@ -38,7 +38,7 @@ def get_job_run(
 def run_job(service: Literal["analysis", "clustering", "prediction"]) -> AcceptedJob:
     """Only trigger a fixed service URL; the service owns execution and Gold writes."""
     token = settings.job_trigger_token.get_secret_value()
-    if settings.auth_enabled and not token:
+    if not token:
         raise HTTPException(503, "Internal job authentication is not configured")
     url = {
         "analysis": settings.analysis_url,
