@@ -25,6 +25,8 @@ def test_decided_values_from_issue_13():
     assert (ml_config.LABEL_HIGH, ml_config.LABEL_LOW) == ("Cao", "Thấp")
     assert list(ml_config.K_RANGE) == [2, 3, 4, 5, 6] and ml_config.K_FORCED == 3
     assert ml_config.CLUSTER_FEATURES == ["http_mean", "l7_max", "bot_mean"]
+    assert (ml_config.CLUSTER_FEATURE_MODE, ml_config.CLUSTER_BASELINE_DAYS, ml_config.CLUSTER_MIN_HISTORY) == ("diff", 28, 14)
+    assert ml_config.CLUSTER_MODEL_FEATURES == ["http_mean_rel", "l7_max_rel", "bot_mean_rel"]
     assert ml_config.CLUSTER_METRICS == ["http_traffic", "l7_attack", "bot_share"]
     assert set(ml_config.CLUSTER_NAMES.values()) == {"Bình thường", "Cao điểm", "Bất thường"}
 
@@ -37,6 +39,9 @@ def test_decided_values_from_issue_13():
         {"training.rf_min_samples_leaf_grid": []},
         {"training.val_ratio": 1},
         {"risk.label_mode": "abs"},
+        {"cluster.feature_mode": "pct"},
+        {"cluster.baseline_days": 3},
+        {"cluster.min_history_days": 99},
         {"risk.rolling_days": 3},
         {"risk.percentile": 100},
         {"risk.proba_cutoff": 0},

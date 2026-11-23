@@ -79,12 +79,12 @@ def env(tmp_path_factory):
 
 def _bundle(centers):
     """Bundle giả: chỉ cần tâm cụm (đã chuẩn hóa) và thứ tự cột, như pipeline thật."""
-    return {"model": [None, SimpleNamespace(cluster_centers_=np.array(centers, dtype=float))], "features": tm.CLUSTER_FEATURES}
+    return {"model": [None, SimpleNamespace(cluster_centers_=np.array(centers, dtype=float))], "features": tm.CLUSTER_MODEL_FEATURES}
 
 
 def test_build_daily_features_columns_and_no_nan(env):
     f = ct.build_daily_features(FakeWarehouse(env[1]))
-    assert list(f.columns) == ["http_mean", "l7_max", "bot_mean"] and not f.isna().any().any() and len(f) > 60
+    assert list(f.columns) == ["http_mean", "l7_max", "bot_mean", "http_mean_rel", "l7_max_rel", "bot_mean_rel"] and not f.isna().any().any() and len(f) > 60
     assert str(f.index.tz) == "Asia/Ho_Chi_Minh"
 
 
@@ -100,7 +100,7 @@ def test_assign_clusters_upserts_all_days(env):
     assert ct.assign_clusters(f, bundle, mart) == len(f) == len(mart.upserts)
     day, cid, name, feats = mart.upserts[0]
     assert day == f.index[0].date() and 0 <= cid < bundle["k"] and name
-    assert set(feats.obj) == {"http_mean", "l7_max", "bot_mean", "metric"}
+    assert set(feats.obj) == {"http_mean", "l7_max", "bot_mean", "http_mean_rel", "l7_max_rel", "bot_mean_rel", "metric"}
     # Mỗi cluster_id luôn cùng một tên.
     assert len({(r[1], r[2]) for r in mart.upserts}) == len({r[1] for r in mart.upserts})
 
@@ -192,10 +192,11 @@ class FailingMart(FakeMart):
 
 
 def test_build_daily_features_one_full_day_is_enough_but_partial_day_is_not():
-    # Đặc trưng phân cụm không cần lịch sử (không lag): 1 ngày đủ giờ -> 1 dòng; 23 giờ -> rỗng.
-    f = ct.build_daily_features(FakeWarehouse(_const_data(1)))
-    assert len(f) == 1 and f.index[0] == pd.Timestamp("2026-01-01", tz=TZ)
-    assert ct.build_daily_features(FakeWarehouse(_const_data(1, hours=23))).empty
+    # Đặc trưng tương đối cần >= 14 ngày lịch sử: 15 ngày đủ giờ -> 1 dòng (ngày 15); 1 ngày hoặc 23 giờ/ngày -> rỗng.
+    f = ct.build_daily_features(FakeWarehouse(_const_data(15)))
+    assert len(f) == 1 and f.index[0] == pd.Timestamp("2026-01-15", tz=TZ) and f.attrs["dropped_no_history"] == 14
+    assert ct.build_daily_features(FakeWarehouse(_const_data(1))).empty
+    assert ct.build_daily_features(FakeWarehouse(_const_data(15, hours=23))).empty
 
 
 def test_build_daily_features_drops_only_the_gap_day():
@@ -204,9 +205,10 @@ def test_build_daily_features_drops_only_the_gap_day():
     day = pd.to_datetime(h["ts"]).dt.tz_convert(TZ).dt.day
     data["bot_share"] = h[day != 15]  # thiếu hẳn ngày 15 ở một metric
     f = ct.build_daily_features(FakeWarehouse(data))
-    assert not f.isna().any().any() and len(f) == 29
+    # 14 ngày đầu thiếu lịch sử bị bỏ, ngày thiếu dữ liệu bị bỏ; ngày 16 vẫn còn vì baseline có đúng 14 ngày hợp lệ.
+    assert not f.isna().any().any() and len(f) == 15
     assert pd.Timestamp("2026-01-15", tz=TZ) not in f.index
-    assert pd.Timestamp("2026-01-16", tz=TZ) in f.index  # không còn phụ thuộc lag
+    assert pd.Timestamp("2026-01-16", tz=TZ) in f.index
 
 
 def test_build_daily_features_queries_all_cluster_metrics():

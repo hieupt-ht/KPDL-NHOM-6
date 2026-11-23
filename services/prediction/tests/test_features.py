@@ -88,7 +88,7 @@ def test_cluster_features_daily_http_mean_l7_max_bot_mean():
     http = vn_hourly(5, value=lambda t: 10.0 + t.day)
     l7 = vn_hourly(5, value=lambda t: float(t.hour))
     bot = vn_hourly(5, value=lambda t: 30.0)
-    df = build_cluster_features({"http_traffic": http, "l7_attack": l7, "bot_share": bot})
+    df = build_cluster_features({"http_traffic": http, "l7_attack": l7, "bot_share": bot}, mode="absolute")
     assert list(df.columns) == ["http_mean", "l7_max", "bot_mean"] and len(df) == 5
     assert df.iloc[0].tolist() == [11.0, 23.0, 30.0]
 
@@ -96,9 +96,45 @@ def test_cluster_features_daily_http_mean_l7_max_bot_mean():
 def test_cluster_features_drop_day_missing_in_any_metric():
     http, l7, bot = vn_hourly(5), vn_hourly(5), vn_hourly(5)
     day = pd.to_datetime(bot["ts"]).dt.tz_convert(TIMEZONE).dt.day
-    df = build_cluster_features({"http_traffic": http, "l7_attack": l7, "bot_share": bot[day != 3]})
+    df = build_cluster_features({"http_traffic": http, "l7_attack": l7, "bot_share": bot[day != 3]}, mode="absolute")
     assert len(df) == 4 and pd.Timestamp("2026-01-03", tz=TIMEZONE) not in df.index
-    assert build_cluster_features({}).empty
+    assert build_cluster_features({}, mode="absolute").empty and build_cluster_features({}, mode="diff").empty
+
+
+def _rel_inputs(days=40, spike_day=35):
+    """http tăng dần 1/ngày; l7 phẳng 10 (đỉnh 100 ở ngày spike_day); bot phẳng 20."""
+    d = lambda t: (t.normalize() - pd.Timestamp("2026-01-01", tz=TIMEZONE)).days
+    http = vn_hourly(days, value=lambda t: 100.0 + d(t.tz_convert(TIMEZONE)))
+    l7 = vn_hourly(days, value=lambda t: 100.0 if d(t.tz_convert(TIMEZONE)) == spike_day and t.hour == 5 else 10.0)
+    return {"http_traffic": http, "l7_attack": l7, "bot_share": vn_hourly(days, value=lambda t: 20.0)}
+
+
+def test_cluster_features_diff_uses_past_median_only_and_drops_short_history():
+    df = build_cluster_features(_rel_inputs(), mode="diff")
+    # 14 ngày đầu thiếu lịch sử (cần >= 14 ngày hợp lệ trước đó) bị bỏ: ngày 14 là ngày đầu tiên còn lại.
+    assert df.index[0] == pd.Timestamp("2026-01-15", tz=TIMEZONE) and df.attrs["dropped_no_history"] == 14
+    assert list(df.columns) == ["http_mean", "l7_max", "bot_mean", "http_mean_rel", "l7_max_rel", "bot_mean_rel"]
+    # Ngày 14 (http = 114): median của ngày 0..13 = 106.5 -> chênh 7.5; không dùng chính ngày đó.
+    assert df.loc[df.index[0], "http_mean_rel"] == pytest.approx(7.5)
+    # Đỉnh l7 (100 so với median 10 của quá khứ) = +90; ngày ngay sau đó median vẫn 10 -> 0.
+    spike = pd.Timestamp("2026-02-05", tz=TIMEZONE)
+    assert df.loc[spike, "l7_max_rel"] == pytest.approx(90.0) and df.loc[spike + pd.Timedelta(days=1), "l7_max_rel"] == 0.0
+
+
+def test_cluster_features_ratio_and_zero_median_dropped():
+    inp = _rel_inputs()
+    df = build_cluster_features(inp, mode="ratio")
+    assert df.loc[pd.Timestamp("2026-02-05", tz=TIMEZONE), "l7_max_rel"] == pytest.approx(10.0)
+    inp["bot_share"] = vn_hourly(40, value=lambda t: 0.0)  # median 0: tỉ số vô nghĩa -> ngày bị bỏ, không thành inf
+    assert build_cluster_features(inp, mode="ratio").empty
+
+
+def test_cluster_features_diff_ignores_future_values():
+    inp = _rel_inputs()
+    full = build_cluster_features(inp, mode="diff")
+    cut = {m: h[pd.to_datetime(h["ts"]).dt.tz_convert(TIMEZONE) < pd.Timestamp("2026-01-31", tz=TIMEZONE)] for m, h in inp.items()}
+    part = build_cluster_features(cut, mode="diff")
+    pd.testing.assert_frame_equal(full.loc[part.index].drop(columns=[]), part, check_freq=False)
 
 
 def test_load_hourly_reads_only_radar_source():

@@ -21,6 +21,9 @@ def load_config(path: Path | str | None = None) -> dict[str, Any]:
     return cfg
 
 
+CLUSTER_FEATURE_MODES = ("absolute", "diff", "ratio")
+
+
 def _validate(cfg: dict[str, Any]) -> None:
     feats, cl = cfg["features"], cfg["cluster"]
     if min(feats["lags"]) < cfg["horizon_days"]:
@@ -50,6 +53,12 @@ def _validate(cfg: dict[str, Any]) -> None:
         raise ValueError("cluster.features: tên đặc trưng bị trùng")
     if any(f["agg"] not in ("mean", "max") for f in cl["features"]):
         raise ValueError("cluster.features[].agg chỉ nhận mean hoặc max")
+    if cl.get("feature_mode", "absolute") not in CLUSTER_FEATURE_MODES:
+        raise ValueError("cluster.feature_mode chỉ nhận absolute, diff hoặc ratio")
+    if cl.get("baseline_days", 28) < 7:
+        raise ValueError("cluster.baseline_days phải >= 7")
+    if not 1 <= cl.get("min_history_days", 14) <= cl.get("baseline_days", 28):
+        raise ValueError("cluster.min_history_days phải trong [1, baseline_days]")
     roles = cl["roles"]
     if roles["traffic"] not in names or not set(roles["attack"]) <= set(names):
         raise ValueError("cluster.roles phải trỏ tới tên trong cluster.features")
@@ -89,6 +98,20 @@ WEAK_SILHOUETTE: float = _CL["weak_silhouette"]
 CLUSTER_SPECS: list[dict[str, str]] = _CL["features"]  # name, metric, agg (theo ngày)
 CLUSTER_FEATURES: list[str] = [f["name"] for f in CLUSTER_SPECS]
 CLUSTER_METRICS: list[str] = list(dict.fromkeys(f["metric"] for f in CLUSTER_SPECS))
+# "absolute": K-Means trên giá trị ngày. "diff" / "ratio": trên (giá trị - median) hoặc (giá trị / median) của
+# baseline_days ngày TRƯỚC đó (không gồm ngày đang xét); ngày có < min_history_days ngày hợp lệ trong baseline bị bỏ.
+CLUSTER_FEATURE_MODE: str = _CL.get("feature_mode", "absolute")
+CLUSTER_BASELINE_DAYS: int = _CL.get("baseline_days", 28)
+CLUSTER_MIN_HISTORY: int = _CL.get("min_history_days", 14)
+REL_SUFFIX = "_rel"
+
+
+def cluster_model_col(name: str, mode: str | None = None) -> str:
+    """Tên cột đưa vào K-Means: `name` (absolute) hoặc `name_rel` (diff/ratio)."""
+    return name if (mode or CLUSTER_FEATURE_MODE) == "absolute" else name + REL_SUFFIX
+
+
+CLUSTER_MODEL_FEATURES: list[str] = [cluster_model_col(n) for n in CLUSTER_FEATURES]  # cột K-Means thật sự dùng
 CLUSTER_TRAFFIC: str = _CL["roles"]["traffic"]
 CLUSTER_ATTACK: list[str] = list(_CL["roles"]["attack"])
 CLUSTER_NAMES: dict[str, str] = _CL["names"]  # normal | peak | anomaly
@@ -117,9 +140,12 @@ def name_clusters(centers, features: list[str]) -> dict[int, str]:
     """
     import numpy as np
 
+    def col(name: str) -> int:  # vai trò trỏ tên gốc; bundle có thể chứa cột `_rel`
+        return features.index(name if name in features else name + REL_SUFFIX)
+
     centers = np.asarray(centers, dtype=float)
-    traffic = centers[:, features.index(CLUSTER_TRAFFIC)]
-    attack = centers[:, [features.index(c) for c in CLUSTER_ATTACK]].max(axis=1)
+    traffic = centers[:, col(CLUSTER_TRAFFIC)]
+    attack = centers[:, [col(c) for c in CLUSTER_ATTACK]].max(axis=1)
     k = len(centers)
     if k in (2, 3):
         anomaly = int(np.argmax(attack))

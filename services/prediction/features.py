@@ -10,7 +10,11 @@ import pandas as pd
 import psycopg
 
 from ml_config import (  # noqa: F401  (cấu hình: ml_config.json)
+    CLUSTER_BASELINE_DAYS,
+    CLUSTER_FEATURE_MODE,
     CLUSTER_FEATURES,
+    CLUSTER_MIN_HISTORY,
+    REL_SUFFIX,
     CLUSTER_METRICS,
     CLUSTER_SPECS,
     HORIZON,
@@ -142,13 +146,27 @@ def load_cluster_hourly(conn: psycopg.Connection) -> dict[str, pd.DataFrame]:
     return {m: load_hourly(conn, m) for m in CLUSTER_METRICS}
 
 
-def build_cluster_features(hourlies: dict[str, pd.DataFrame]) -> pd.DataFrame:
-    """Đặc trưng phân cụm theo ngày VN: mỗi cột = gộp ngày (mean/max) của một metric.
+def build_cluster_features(hourlies: dict[str, pd.DataFrame], mode: str | None = None) -> pd.DataFrame:
+    """Đặc trưng phân cụm theo ngày VN. Dùng chung cho training và services/clustering.
 
-    Chỉ giữ ngày đủ giờ ở mọi metric. Thiếu metric (không có trong `hourlies`) thì không có ngày nào.
+    Cột gốc (`CLUSTER_FEATURES`): gộp ngày (mean/max) của từng metric; chỉ giữ ngày đủ giờ ở mọi metric.
+    Với mode "diff" / "ratio" thêm cột `<tên>_rel` = giá trị - median (hoặc / median) của CLUSTER_BASELINE_DAYS ngày
+    liền trước (không gồm ngày đang xét). Ngày có < CLUSTER_MIN_HISTORY ngày hợp lệ trong baseline (hoặc median <= 0
+    ở mode ratio) bị bỏ; số ngày bị bỏ nằm ở `df.attrs["dropped_no_history"]`.
     """
-    cols = {
-        s["name"]: daily_agg(hourlies.get(s["metric"], pd.DataFrame(columns=["ts", "value"])), s["agg"])
-        for s in CLUSTER_SPECS
-    }
-    return pd.DataFrame(cols, columns=CLUSTER_FEATURES).dropna()
+    mode = mode or CLUSTER_FEATURE_MODE
+    empty = pd.DataFrame(columns=["ts", "value"])
+    cols = {s["name"]: daily_agg(hourlies.get(s["metric"], empty), s["agg"]) for s in CLUSTER_SPECS}
+    raw = pd.DataFrame(cols, columns=CLUSTER_FEATURES)
+    if not raw.empty:
+        raw = raw.asfreq("D")  # lịch liên tục: cửa sổ 28 dòng = 28 ngày
+    valid = raw.dropna()
+    if mode == "absolute" or valid.empty:
+        valid.attrs["dropped_no_history"] = 0
+        return valid
+    base = raw.shift(1).rolling(CLUSTER_BASELINE_DAYS, min_periods=CLUSTER_MIN_HISTORY).median()
+    rel = raw - base if mode == "diff" else raw / base.where(base > 0)
+    rel.columns = [c + REL_SUFFIX for c in raw.columns]
+    out = pd.concat([raw, rel], axis=1).dropna()
+    out.attrs["dropped_no_history"] = len(valid) - len(out)
+    return out

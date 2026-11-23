@@ -51,7 +51,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from train_models import MODELS_DIR, load_data, split  # noqa: E402
 from features import classifier_inputs, regressor_inputs  # noqa: E402
 from ml_config import (  # noqa: E402  (train_models đã thêm services/prediction vào sys.path)
-    CLUSTER_FEATURES,
     CLUSTER_TRAFFIC,
     HORIZON,
     LABEL_HIGH,
@@ -208,7 +207,7 @@ def cluster_labels(bundle: dict) -> dict[int, str]:
 
 def eval_kmeans(bundle: dict, cl: pd.DataFrame, saved_metrics: dict | None, out_dir: Path) -> tuple[dict, list[str]]:
     pipe = bundle["model"]
-    X = cl[CLUSTER_FEATURES]
+    X = cl[list(bundle["features"])]
     labels = pipe.predict(X)
     scaled = pipe[0].transform(X)
     names = cluster_labels(bundle)

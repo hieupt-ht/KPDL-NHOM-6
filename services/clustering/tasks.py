@@ -1,6 +1,6 @@
 """Các tác vụ phân cụm trạng thái từng ngày.
 
-Luồng: Silver (metrics_hourly) -> đặc trưng ngày (http_mean, l7_max, bot_mean) -> K-Means đã
+Luồng: Silver (metrics_hourly) -> đặc trưng ngày (http_mean, l7_max, bot_mean + cột *_rel so với median 28 ngày trước) -> K-Means đã
 huấn luyện (models/kmeans.joblib) -> upsert gold.cluster_results. Ngày tính theo giờ VN và chỉ
 dùng ngày đủ 24 mốc giờ ở cả ba metric, khớp features.build_cluster_features khi huấn luyện.
 
@@ -52,6 +52,9 @@ def assign_clusters(features: pd.DataFrame, bundle: dict[str, Any], mart_conn, m
     """Gán cụm cho từng ngày và upsert vào gold.cluster_results. Trả về số dòng ghi."""
     if features.empty:
         return 0
+    missing = [c for c in bundle["features"] if c not in features.columns]
+    if missing:  # bundle train bằng feature_mode khác cấu hình hiện tại
+        raise ValueError(f"Mô hình cần cột {missing} mà đặc trưng ngày không có: kiểm tra cluster.feature_mode, train lại.")
     X = features[list(bundle["features"])]
     ids = bundle["model"].predict(X)
     names = cluster_names(bundle)
@@ -62,7 +65,7 @@ def assign_clusters(features: pd.DataFrame, bundle: dict[str, Any], mart_conn, m
             names[int(cid)],
             Jsonb({**{c: float(v) for c, v in row.items()}, "metric": metric}),
         )
-        for idx, cid, (_, row) in zip(features.index, ids, X.iterrows())
+        for idx, cid, (_, row) in zip(features.index, ids, features.iterrows())
     ]
     with mart_conn.cursor() as cur:
         cur.executemany(

@@ -22,6 +22,9 @@
     "k_range": [2, 6],
     "k": 3,
     "weak_silhouette": 0.25,
+    "feature_mode": "diff",
+    "baseline_days": 28,
+    "min_history_days": 14,
     "features": [
       {"name": "http_mean", "metric": "http_traffic", "agg": "mean"},
       {"name": "l7_max", "metric": "l7_attack", "agg": "max"},

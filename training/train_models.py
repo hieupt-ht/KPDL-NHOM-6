@@ -49,7 +49,8 @@ from features import (  # noqa: E402
 )
 from ml_config import (  # noqa: E402
     CLASSIFIER_FEATURES,
-    CLUSTER_FEATURES,
+    CLUSTER_FEATURE_MODE,
+    CLUSTER_MODEL_FEATURES,
     HORIZON,
     K_FORCED,
     K_RANGE,
@@ -133,7 +134,7 @@ def load_data(metric: str, risk_metric: str, demo: bool, min_days: int) -> tuple
 
 def train_kmeans(cl: pd.DataFrame, k: int | None) -> tuple[dict, dict]:
     """Thử k trong K_RANGE, chọn k Silhouette cao nhất (trừ khi ép --k)."""
-    X = cl[CLUSTER_FEATURES]
+    X = cl[CLUSTER_MODEL_FEATURES]
     scaled = StandardScaler().fit_transform(X)
     scores = {}
     for kk in K_RANGE:
@@ -152,13 +153,17 @@ def train_kmeans(cl: pd.DataFrame, k: int | None) -> tuple[dict, dict]:
     profile.columns = [f"{c}_{s}" for c, s in profile.columns]
     metrics = {
         "k": chosen,
+        "feature_mode": CLUSTER_FEATURE_MODE,
+        "n_days": len(cl),
+        "dropped_no_history": int(cl.attrs.get("dropped_no_history", 0)),
         "best_k_by_silhouette": best_k,
         "k_forced": k is not None,
         "silhouette": sil,
         "scores_by_k": scores,
         "cluster_profile": profile.round(3).to_dict(orient="index"),
     }
-    return {"model": model, "features": CLUSTER_FEATURES, "k": chosen}, metrics
+    bundle = {"model": model, "features": CLUSTER_MODEL_FEATURES, "k": chosen, "feature_mode": CLUSTER_FEATURE_MODE}
+    return bundle, metrics
 
 
 def split(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:

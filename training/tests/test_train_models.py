@@ -93,5 +93,6 @@ def test_forced_k(tmp_path):
     r = train_models(demo=True, k=2, out_dir=tmp_path)
     assert r["kmeans"]["k"] == 2 and r["kmeans"]["k_forced"]
     km = joblib.load(tmp_path / "kmeans.joblib")
-    assert km["model"][-1].n_clusters == 2 and km["features"] == ["http_mean", "l7_max", "bot_mean"]
-    assert km["model"].predict(build_cluster_features(make_demo_data(days=60))).max() <= 1
+    assert km["model"][-1].n_clusters == 2 and km["features"] == ["http_mean_rel", "l7_max_rel", "bot_mean_rel"]
+    assert km["feature_mode"] == "diff" and r["kmeans"]["dropped_no_history"] == 14
+    assert km["model"].predict(build_cluster_features(make_demo_data(days=60))[km["features"]]).max() <= 1
