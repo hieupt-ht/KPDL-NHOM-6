@@ -70,6 +70,7 @@ services:
       WAREHOUSE_DSN: postgresql://ingestion_user:${INGESTION_DB_PASSWORD}@warehouse-db:5432/${WAREHOUSE_DB}
       CF_API_TOKEN: ${CF_API_TOKEN}
       INGESTION_INTERVAL_SECONDS: ${INGESTION_INTERVAL_SECONDS:-300}
+      BACKFILL_TARGET_DAYS: ${BACKFILL_TARGET_DAYS:-365}
     depends_on:
       warehouse-db: {condition: service_healthy}
     healthcheck:
