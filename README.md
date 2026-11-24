@@ -407,13 +407,12 @@ cyber-radar-vn/
 │   ├── app/
 │   │   ├── layout.tsx
 │   │   ├── page.tsx                # dashboard
-│   │   ├── admin/page.tsx          # nút Run các job
-│   │   └── api/auth/[...nextauth]/route.ts
+│   │   └── admin/page.tsx          # nút Run các job
 │   ├── components/
 │   │   ├── charts/                 # LineChart, Scatter, Histogram, Heatmap, ...
 │   │   ├── kpi/                    # thẻ dự báo, nhãn rủi ro
 │   │   └── filters/
-│   ├── lib/api.ts                  # gọi API kèm token
+│   ├── lib/api.ts                  # gọi API (không cần đăng nhập)
 │   └── tailwind.config.ts
 ├── models/                         # kmeans.pkl, scaler.pkl, regressor.pkl, classifier.pkl, metrics.json
 ├── training/
