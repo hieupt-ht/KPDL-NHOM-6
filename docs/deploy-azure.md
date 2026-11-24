@@ -5,6 +5,7 @@ Theo mục điểm cộng trong slide của thầy: **VM + Function + Container 
 - **Portal** (web Azure): bấm tạo từng dịch vụ.
 - **VM**: mọi lệnh (khởi tạo database, build image, huấn luyện mô hình) chạy trong **một cửa sổ SSH vào VM**. Không cần cài Docker hay Azure CLI trên máy bạn.
 - **Cloud Shell** (nút `>_` trên Portal): chỉ dùng một lần để đưa mã Function lên.
+- **Vercel** (miễn phí): chạy giao diện web (frontend), nối thẳng với GitHub, không cần build image.
 
 > **Trạng thái kiểm chứng.** Đã chạy thử trên máy phát triển: script `deploy/azure/init-managed-db.sh` (hai database trên một PostgreSQL 16, chạy hai lần), phân quyền role, `deploy/azure/vm-compose.yml`, `deploy/azure/Dockerfile.models`, test của Function và test CORS của API. **Chưa chạy trên Azure thật**: tên nút trên Portal có thể lệch chút, chính sách tài khoản sinh viên có thể chặn một số region hoặc size VM. Gặp lỗi xem mục 14.
 > Bản hướng dẫn dùng lệnh `az` trước đây vẫn xem được ở commit `97b8429` (lịch sử git).
@@ -24,30 +25,31 @@ Functions (timer) ── POST /run ─┐         └─ database mart (gold)
                           ca-prediction  (kèm mô hình)     │
                           ca-clustering  (kèm mô hình)     │
                                                            │
-Trình duyệt ──► Container Apps: ca-web ──► ca-api ─────────┘
+Trình duyệt ──► Vercel (frontend) ──► ca-api ──────────────┘
 ```
 
 | Yêu cầu của thầy | Thành phần Azure | Chạy gì |
 | :--- | :--- | :--- |
 | VM | Virtual Machine Ubuntu | `ingestion` (chạy liên tục, có luồng backfill nền) và `trainer` (huấn luyện một lần); đồng thời là nơi build image |
 | Function | Azure Functions, timer | Hẹn giờ `POST /run`: analysis và prediction mỗi 5 phút, clustering mỗi ngày 00:30 giờ VN |
-| Container Apps | Container Apps (Consumption) | `ca-analysis`, `ca-prediction`, `ca-clustering`, `ca-api`, `ca-web` |
+| Container Apps | Container Apps (Consumption) | `ca-analysis`, `ca-prediction`, `ca-clustering`, `ca-api` |
+| Front End | Vercel (Hobby, miễn phí) | Next.js, gọi `ca-api` từ trình duyệt. Muốn đặt frontend trong Azure thì xem phụ lục (mục 18) |
 | Azure PostgreSQL | Flexible Server (Burstable) | **Một server, hai database** `warehouse` và `mart`, vẫn tách ba user theo ranh giới ghi dữ liệu |
 
 Điểm cần biết:
 
 - Các service backend chạy `SCHEDULER_ENABLED=false`; Function thay APScheduler. Bấm **Chạy lại** ở `/admin` vẫn hoạt động như cũ.
 - Ingestion giữ `SCHEDULER_ENABLED=true` trên VM vì luồng backfill 365 ngày chỉ chạy ở chế độ này.
-- Web và API khác domain nên API đọc danh sách origin từ biến `CORS_ORIGINS`.
+- Web (Vercel) và API (Container Apps) khác domain nên API đọc danh sách origin từ biến `CORS_ORIGINS`, đặt bằng địa chỉ Vercel.
 - Mô hình (`*.joblib`) không nằm trong git: huấn luyện một lần trên VM rồi **đóng gói vào image** `ca-prediction` và `ca-clustering`.
 
 ## 2. Chi phí (ước tính, cần tự kiểm tra bằng Pricing Calculator)
 
 | Thành phần | Cấu hình | Ước tính/tháng nếu bật 24/7 |
 | :--- | :--- | :--- |
-| VM `Standard_B2s` (4 GiB) + ổ 64 GiB | cần 4 GiB để build frontend | ~35 (hạ xuống size nhỏ sau khi build xong thì ít hơn) |
+| VM `Standard_B2s` (4 GiB) + ổ 64 GiB | 4 GiB cho thoải mái khi build image Python và huấn luyện | ~35 (hạ xuống size nhỏ sau khi build xong thì ít hơn) |
 | PostgreSQL B1ms, 32 GiB | một server | 0 nếu dùng được [ưu đãi 12 tháng của gói sinh viên](https://azure.microsoft.com/free/students), khoảng 15–20 nếu không |
-| Container Apps | `ca-analysis`, `ca-prediction` luôn bật 1 bản sao (~12 mỗi cái); 3 app còn lại về 0 khi rảnh | ~25 (đơn giá lấy theo trí nhớ, chưa xác minh) |
+| Container Apps | `ca-analysis`, `ca-prediction` luôn bật 1 bản sao (~12 mỗi cái); `ca-clustering` và `ca-api` về 0 khi rảnh | ~25 (đơn giá lấy theo trí nhớ, chưa xác minh) |
 | Container Registry Basic | | ~5 |
 | Functions + Storage | timer 5 phút, trong [gói miễn phí](https://azure.microsoft.com/en-us/pricing/details/functions/) | ~1 |
 
@@ -71,6 +73,8 @@ Tổng khoảng **60–90 USD/tháng nếu bật liên tục**, tức ~2–3 USD
 Các giá trị này độc lập với `.env` chạy local. Quy tắc của Azure: tên admin không được là `admin`, `administrator`, `root`, `guest`, `public`, `azure_superuser` hoặc bắt đầu bằng `pg_`; mật khẩu admin dài 8–128 ký tự và có ký tự từ ít nhất 3 trong 4 nhóm.
 
 2. (Khuyên làm) Portal → **Cost Management + Billing → Budgets → Add**: phạm vi subscription, ngân sách 60 USD, cảnh báo 50% và 80% qua email.
+
+3. Tài khoản **Vercel** (gói Hobby, miễn phí): đăng ký ở vercel.com bằng nút **Continue with GitHub**, dùng đúng tài khoản GitHub sở hữu repo.
 
 ## 4. [Portal] Resource group
 
@@ -133,7 +137,7 @@ Portal hiện **không có nút tạo riêng** environment (trang *Container App
 | Virtual machine name | `kpdl-vm` |
 | Region | cùng region |
 | Image | **Ubuntu Server 24.04 LTS - x64 Gen2** |
-| Size | **Standard_B2s** (cần ≥ 4 GiB RAM để build frontend). Nếu không có, chọn size x64 khác có ≥ 4 GiB (B2s_v2, B2as_v2...). **Không** chọn size Arm (tên có chữ `p`, ví dụ B2ps) |
+| Size | **Standard_B2s** (4 GiB RAM). Nếu không có, chọn size x64 khác có ≥ 4 GiB (B2s_v2, B2as_v2...). **Không** chọn size Arm (tên có chữ `p`, ví dụ B2ps) |
 | Authentication type | SSH public key |
 | Username | `azureuser` |
 | SSH public key source | **Generate new key pair**, tên `kpdl-vm_key` |
@@ -183,7 +187,7 @@ sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapf
 echo "/swapfile none swap sw 0 0" | sudo tee -a /etc/fstab
 ```
 
-Dòng `usermod` chỉ có hiệu lực sau khi đăng nhập lại: gõ `exit` rồi SSH lại như 8.1. Dòng `swapon` giúp VM không hết RAM khi build frontend.
+Dòng `usermod` chỉ có hiệu lực sau khi đăng nhập lại: gõ `exit` rồi SSH lại như 8.1. Dòng `swapon` giúp VM không hết RAM khi build image và huấn luyện.
 
 ### 8.3 Lấy mã nguồn
 
@@ -294,7 +298,7 @@ docker build -f training/Dockerfile --target trainer -t $ACR_LOGIN/kpdl-trainer:
 ```
 
 - Hai image `clustering` và `prediction` chỉ build tại VM, **chưa đẩy lên registry**: ở bước 11.5 ta đóng gói mô hình vào rồi mới đẩy.
-- Image `web` build ở bước 11.4, vì cần `DOMAIN`.
+- Frontend không build ở VM mà chạy trên Vercel (bước 11.4).
 
 In các giá trị cần dán vào Portal ở các bước sau:
 
@@ -345,23 +349,27 @@ source ~/kpdl.env
 echo $DOMAIN
 ```
 
-### 11.4 [VM] Build `web` (cần `DOMAIN`) rồi [Portal] tạo `ca-api`, `ca-web`
+### 11.4 [Vercel] Frontend, rồi [Portal] tạo `ca-api`
 
-```bash
-docker build -f frontend/Dockerfile \
-  --build-arg NEXT_PUBLIC_API_URL=https://ca-api.$DOMAIN \
-  --build-arg NEXT_PUBLIC_DATA_MODE=api \
-  -t $ACR_LOGIN/kpdl-web:v1 frontend && docker push $ACR_LOGIN/kpdl-web:v1
-```
+Frontend chạy trên **Vercel**. Nó chỉ cần biết địa chỉ API là `https://ca-api.DOMAIN` (đã xác định được dù `ca-api` chưa tạo), nên làm Vercel **trước**, lấy địa chỉ web để đặt `CORS_ORIGINS` cho `ca-api`.
 
-Build `web` chạy luôn test đơn vị, lint và `next build`, mất vài phút. `NEXT_PUBLIC_API_URL` nhúng lúc build: nếu đổi `DOMAIN` hoặc tên `ca-api` thì phải build lại `web`.
+**Chuẩn bị (một lần):** nhánh mặc định của repo là `main`, mà `main` **chưa có thư mục `frontend`** (code nằm ở `develop`). Để Vercel thấy code: GitHub → repo → **Settings → Branches → Default branch** → đổi sang `develop` → Update. (Chỉ đổi nhánh mặc định, không đổi code; PR của dự án vốn nhắm vào `develop`.)
 
-Rồi tạo hai app theo 11.2 (environment chọn `kpdl-env` có sẵn):
+1. Vào vercel.com → **Add New… → Project** → **Import Git Repository** → chọn `hieupt-ht/KPDL-NHOM-6`. Lần đầu Vercel sẽ yêu cầu cấp quyền đọc repo (nút *Install* / *Adjust GitHub App Permissions*), cấp cho đúng repo này.
+2. Ở trang **Configure Project**:
+   - **Project Name**: `kpdl-web-SUF` (để địa chỉ ngắn, dạng `https://kpdl-web-SUF.vercel.app`).
+   - **Framework Preset**: Next.js.
+   - **Root Directory**: bấm **Edit** và chọn thư mục `frontend`.
+   - **Environment Variables**: thêm hai biến `NEXT_PUBLIC_API_URL` = `https://ca-api.DOMAIN` và `NEXT_PUBLIC_DATA_MODE` = `api`.
+   - Để nguyên Build Command và Output Directory.
+3. Bấm **Deploy**, chờ build vài phút. Xong, địa chỉ production hiện ở trang project (nút **Visit** hoặc mục Domains), dạng `https://kpdl-web-SUF.vercel.app`. Ghi lại đúng địa chỉ **ngắn** này (không có `/` ở cuối); gọi là `WEB_URL`. Lúc này web mở được nhưng chưa có dữ liệu vì `ca-api` chưa tạo.
+4. Nếu mở web mà bị bắt đăng nhập Vercel: **Settings → Deployment Protection** → tắt *Vercel Authentication* (hoặc dùng địa chỉ production ngắn thay vì địa chỉ dài của từng lần deploy).
+
+Rồi tạo `ca-api` theo 11.2 (environment chọn `kpdl-env` có sẵn):
 
 | App | Image : tag | Port | CPU / RAM | Min / Max replicas |
 | :--- | :--- | :--- | :--- | :--- |
 | `ca-api` | `kpdl-api` : `v1` | 8000 | 0.25 / 0.5 Gi | 0 / 1 |
-| `ca-web` | `kpdl-web` : `v1` | 3000 | 0.25 / 0.5 Gi | 0 / 1 |
 
 **Biến môi trường `ca-api`:**
 
@@ -373,9 +381,7 @@ Rồi tạo hai app theo 11.2 (environment chọn `kpdl-env` có sẵn):
 | `CLUSTERING_URL` | `https://ca-clustering.DOMAIN` |
 | `PREDICTION_URL` | `https://ca-prediction.DOMAIN` |
 | `JOB_REQUEST_TIMEOUT_SECONDS` | `45` (dư cho lần khởi động lạnh của app) |
-| `CORS_ORIGINS` | `https://ca-web.DOMAIN` (không có dấu `/` ở cuối) |
-
-**Biến môi trường `ca-web`:** `HOSTNAME` = `0.0.0.0`, `PORT` = `3000`.
+| `CORS_ORIGINS` | `WEB_URL`, tức địa chỉ Vercel ở trên (không có dấu `/` ở cuối) |
 
 (Thay `DOMAIN` bằng Default domain thật. Các DSN và token nhập thẳng vào ô giá trị cho đơn giản; chấp nhận được với đồ án ngắn hạn. Muốn kín hơn thì dùng mục **Secrets** của app rồi chọn *Reference a secret*.)
 
@@ -456,8 +462,8 @@ Lịch (giờ UTC, trong `function_app.py`): `analysis` và `prediction` mỗi 5
 Thay `DOMAIN` bằng Default domain thật:
 
 1. Mở `https://ca-api.DOMAIN/health` trên trình duyệt: phải hiện `{"status":"ok","service":"api"}`. `https://ca-api.DOMAIN/ready` kiểm tra kết nối database (lần đầu có thể chậm vài giây vì app khởi động lạnh).
-2. Mở `https://ca-web.DOMAIN`, bật **F12 → Network**: thấy các request `/api/...` đi tới `ca-api`. Gold ban đầu trống nên API trả 404, đây là thiết kế chứ không phải lỗi.
-3. Vào `https://ca-web.DOMAIN/admin`, bấm **Chạy lại** cho analysis, prediction, clustering và chờ trạng thái cuối.
+2. Mở `WEB_URL` (địa chỉ Vercel), bật **F12 → Network**: thấy các request `/api/...` đi tới `ca-api`. Gold ban đầu trống nên API trả 404, đây là thiết kế chứ không phải lỗi.
+3. Vào `WEB_URL/admin`, bấm **Chạy lại** cho analysis, prediction, clustering và chờ trạng thái cuối.
 4. Portal → Function App → **Functions** → từng hàm → **Monitor / Invocations**: thấy lượt chạy mỗi 5 phút, kết quả "đã nhận lệnh chạy" (hoặc "đang có job chạy, bỏ qua" khi trùng).
 5. Tải lại web: đủ biểu đồ, dự báo ngày mai và nhãn rủi ro.
 
@@ -472,13 +478,13 @@ Chụp màn hình các bước này và Portal đang hiện bốn loại dịch 
 - **Function App** → **Stop**.
 - Mỗi **Container App** → Scale → Min replicas = 0.
 
-**Trước buổi chấm**, bật lại theo thứ tự: PostgreSQL → VM → Container Apps (đặt lại Min = 1 cho `ca-analysis`, `ca-prediction`, và nên cả `ca-api`, `ca-web` để khỏi chờ khởi động lạnh) → Function App.
+**Trước buổi chấm**, bật lại theo thứ tự: PostgreSQL → VM → Container Apps (đặt lại Min = 1 cho `ca-analysis`, `ca-prediction`, và nên cả `ca-api` để khỏi chờ khởi động lạnh) → Function App.
 
 **Xong đồ án:** **Resource groups → `kpdl-rg` → Delete resource group** (gõ tên group để xác nhận). Việc này xóa sạch mọi thứ và ngừng tính tiền.
 
 ## 15. Cập nhật phiên bản
 
-SSH vào VM, `cd ~/KPDL-NHOM-6 && source ~/kpdl.env`, `git pull`, build lại image với tag mới (ví dụ `v2`) rồi đẩy lên registry. Trên Portal, vào app → **Application → Containers → Edit and deploy**, đổi tag của image rồi Create. Huấn luyện lại mô hình: lặp lại bước 11.5, đẩy `:v2-models`, đổi tag cho `ca-prediction` và `ca-clustering`. Ingestion trên VM: `docker build ... -t $ACR_LOGIN/kpdl-ingestion:v1 .` rồi `dc up -d --force-recreate ingestion`.
+SSH vào VM, `cd ~/KPDL-NHOM-6 && source ~/kpdl.env`, `git pull`, build lại image với tag mới (ví dụ `v2`) rồi đẩy lên registry. Trên Portal, vào app → **Application → Containers → Edit and deploy**, đổi tag của image rồi Create. Huấn luyện lại mô hình: lặp lại bước 11.5, đẩy `:v2-models`, đổi tag cho `ca-prediction` và `ca-clustering`. Ingestion trên VM: `docker build ... -t $ACR_LOGIN/kpdl-ingestion:v1 .` rồi `dc up -d --force-recreate ingestion`. Frontend: Vercel tự deploy lại mỗi khi có commit mới ở nhánh `develop`; nếu chỉ đổi biến môi trường thì vào **Deployments → ⋯ → Redeploy**.
 
 ## 16. Xử lý sự cố
 
@@ -489,9 +495,10 @@ SSH vào VM, `cd ~/KPDL-NHOM-6 && source ~/kpdl.env`, `git pull`, build lại im
 | Lệnh báo biến rỗng hoặc "chưa đặt" | Quên `cd ~/KPDL-NHOM-6 && source ~/kpdl.env` ở phiên SSH mới |
 | `permission denied ... docker.sock` | Chưa đăng nhập lại sau `usermod`: gõ `exit` rồi SSH lại |
 | `docker push` bị từ chối | Chạy lại `echo "$ACR_PW" \| docker login $ACR_LOGIN -u $ACR_NAME --password-stdin`. Chưa bật Admin user của registry thì bật ở Access keys |
-| Build `web` bị kill hoặc hết bộ nhớ | VM thiếu RAM: kiểm tra `free -h` có swap 2G, hoặc đổi VM sang size ≥ 4 GiB |
-| Web báo lỗi mạng/CORS khi gọi API | `CORS_ORIGINS` của `ca-api` phải đúng `https://ca-web.DOMAIN` (không có `/` ở cuối). Sửa ở app → **Environment variables** |
-| Web gọi sai địa chỉ API | `NEXT_PUBLIC_API_URL` nhúng lúc build: build lại `web` với `DOMAIN` đúng, đẩy lên rồi đổi image của `ca-web` |
+| Vercel build lỗi | Mở deployment → **Build Logs**. Kiểm tra Root Directory = `frontend` và Production Branch = `develop` (Settings → Git hoặc Environments) |
+| Vercel không thấy thư mục `frontend` | Nhánh mặc định của repo vẫn là `main`: đổi sang `develop` như đầu bước 11.4 |
+| Web báo lỗi mạng/CORS khi gọi API | `CORS_ORIGINS` của `ca-api` phải đúng `WEB_URL` (địa chỉ Vercel, không có `/` ở cuối). Sửa ở app → **Environment variables** |
+| Web gọi sai địa chỉ API | `NEXT_PUBLIC_API_URL` nhúng lúc build: sửa biến trong Vercel (**Settings → Environment Variables**) rồi **Redeploy** |
 | API trả 503 | Không kết nối được database: kiểm tra DSN có `sslmode=require`, quy tắc "Azure services" ở PostgreSQL → Networking, xem log của app (app → **Monitoring → Log stream**) |
 | Job `failed`: "Chưa có mô hình" | `ca-prediction` hoặc `ca-clustering` chưa dùng image tag `v1-models` |
 | Function báo HTTP 401 | `JOB_TRIGGER_TOKEN` của Function khác của app; đặt lại cho đồng nhất ở mọi nơi |
@@ -506,3 +513,22 @@ SSH vào VM, `cd ~/KPDL-NHOM-6 && source ~/kpdl.env`, `git pull`, build lại im
 - Mật khẩu admin PostgreSQL chỉ dùng cho bước khởi tạo (bước 9); các service chạy bằng ba user ứng dụng có quyền hẹp.
 - PostgreSQL mở cho "mọi dịch vụ Azure" và VM mở cổng SSH ra internet (chỉ cho đăng nhập bằng khóa): chỉ phù hợp đồ án ngắn hạn. Xóa resource group khi xong.
 - Đừng dán `CF_API_TOKEN`, DSN hoặc `JOB_TRIGGER_TOKEN` vào chat, issue hoặc PR.
+
+## 18. Phụ lục: chạy frontend trong Container Apps (thay cho Vercel)
+
+Chỉ làm khi cần đặt cả frontend trong Azure. Cần `DOMAIN` (sau 11.3). Build image `web` trên VM (cần ≥ 4 GiB RAM, đã có swap):
+
+```bash
+docker build -f frontend/Dockerfile \
+  --build-arg NEXT_PUBLIC_API_URL=https://ca-api.$DOMAIN \
+  --build-arg NEXT_PUBLIC_DATA_MODE=api \
+  -t $ACR_LOGIN/kpdl-web:v1 frontend && docker push $ACR_LOGIN/kpdl-web:v1
+```
+
+Build chạy luôn test đơn vị, lint và `next build`, mất vài phút. Rồi tạo app theo 11.2:
+
+| App | Image : tag | Port | CPU / RAM | Min / Max replicas |
+| :--- | :--- | :--- | :--- | :--- |
+| `ca-web` | `kpdl-web` : `v1` | 3000 | 0.25 / 0.5 Gi | 0 / 1 |
+
+Biến môi trường `ca-web`: `HOSTNAME` = `0.0.0.0`, `PORT` = `3000`. Khi đó `WEB_URL` là `https://ca-web.DOMAIN`; đặt `CORS_ORIGINS` của `ca-api` bằng đúng giá trị này.
