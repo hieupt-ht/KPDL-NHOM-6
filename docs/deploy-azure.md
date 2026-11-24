@@ -100,6 +100,8 @@ az postgres flexible-server create -g $RG -n $PG -l $LOC \
   --public-access 0.0.0.0 --yes
 ```
 
+Nếu tạo bằng Portal: ở mục **Compute + storage** chọn **Storage type = Premium SSD** (không phải **Premium SSD v2**). Premium SSD v2 làm mờ tầng **Burstable** ("Burstable compute tier is not supported for server with Premium SSD v2"), khi đó chỉ còn General Purpose từ 2 vCore, đắt hơn nhiều. Lệnh `az` ở trên dùng Premium SSD mặc định nên không gặp lỗi này.
+
 `--public-access 0.0.0.0` bật quy tắc "cho phép dịch vụ Azure" để Container Apps, Functions và VM kết nối được mà không cần VNet (rẻ hơn). Đổi lại, server có endpoint công khai: dựa vào mật khẩu mạnh và TLS (`sslmode=require`). Thêm IP máy bạn để chạy `psql`:
 
 ```bash
