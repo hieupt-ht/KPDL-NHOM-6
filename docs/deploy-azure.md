@@ -121,7 +121,8 @@ Nếu gặp lỗi "subscription is not registered to use namespace ...": **Subsc
 
 **Container Apps environment**
 
-1. **Create a resource → Container Apps Environment**: tên `kpdl-env`, Resource group `kpdl-rg`, cùng region, loại **Consumption only**. Giữ mặc định tab Monitoring (tạo Log Analytics để xem log khi gặp lỗi). Create.
+1. Environment **không có thẻ riêng trong Marketplace** (tìm "Container Apps Environment" ở Create a resource chỉ ra các thẻ khác, ví dụ *Container App*, *Container App Job*, *Session Pool*; đừng chọn mấy thẻ đó ở bước này). Dùng **ô tìm kiếm trên cùng của Portal** (không phải ô trong Marketplace), gõ **Container Apps Environments**, chọn kết quả loại *Services* → **+ Create**. Điền: tên `kpdl-env`, Resource group `kpdl-rg`, cùng region, loại **Consumption only** (Zone redundancy để Disabled). Giữ mặc định tab Monitoring (tạo Log Analytics để xem log khi gặp lỗi). **Review + create → Create.**
+   Nếu vẫn không tìm thấy: tạo luôn `ca-analysis` ở bước 11 bằng thẻ **Container App**; ở tab Basics, mục *Container Apps Environment* bấm **Create new** và đặt tên `kpdl-env`. Cách này tạo environment ngay trong lúc tạo app, rồi bạn xem **Default domain** ở trang environment, và làm bước 11.1 sau khi có `DOMAIN`.
 2. Vào environment → **Overview**, ghi lại **Default domain** (dạng `happy-sea-1a2b3c4d.southeastasia.azurecontainerapps.io`). Từ đây gọi là `DOMAIN`. Địa chỉ mỗi app sẽ là `https://<tên app>.DOMAIN`, ví dụ `https://ca-api.DOMAIN`.
 
 ## 7. [Portal] Máy ảo (VM)
@@ -314,7 +315,7 @@ echo "DOMAIN:                $DOMAIN"
 
 ### 11.2 [Portal] Cách tạo một Container App (áp dụng cho mọi app)
 
-**Create a resource → Container App → Create.**
+**Create a resource**, tìm **Container App** và chọn thẻ **Container App** của *Microsoft* (loại Azure Service). Không chọn *Container App Job*, *Container App Session Pool* hay các thẻ của hãng khác. Bấm **Create**.
 
 - **Basics**: Resource group `kpdl-rg`; Container app name theo bảng; Region cùng region; **Container Apps Environment = `kpdl-env`**.
 - **Container**: bỏ tick **Use quickstart image**. Image source **Azure Container Registry**; Registry `kpdlacrSUF` (nếu hỏi cách xác thực, chọn admin credentials / Secrets); Image và Image tag theo bảng; CPU and Memory theo bảng; thêm **Environment variables** theo bảng (kiểu **Manual entry**).
