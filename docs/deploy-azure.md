@@ -121,9 +121,7 @@ Nếu gặp lỗi "subscription is not registered to use namespace ...": **Subsc
 
 **Container Apps environment**
 
-1. Environment **không có thẻ riêng trong Marketplace** (tìm "Container Apps Environment" ở Create a resource chỉ ra các thẻ khác, ví dụ *Container App*, *Container App Job*, *Session Pool*; đừng chọn mấy thẻ đó ở bước này). Dùng **ô tìm kiếm trên cùng của Portal** (không phải ô trong Marketplace), gõ **Container Apps Environments**, chọn kết quả loại *Services* → **+ Create**. Điền: tên `kpdl-env`, Resource group `kpdl-rg`, cùng region, loại **Consumption only** (Zone redundancy để Disabled). Giữ mặc định tab Monitoring (tạo Log Analytics để xem log khi gặp lỗi). **Review + create → Create.**
-   Nếu vẫn không tìm thấy: tạo luôn `ca-analysis` ở bước 11 bằng thẻ **Container App**; ở tab Basics, mục *Container Apps Environment* bấm **Create new** và đặt tên `kpdl-env`. Cách này tạo environment ngay trong lúc tạo app, rồi bạn xem **Default domain** ở trang environment, và làm bước 11.1 sau khi có `DOMAIN`.
-2. Vào environment → **Overview**, ghi lại **Default domain** (dạng `happy-sea-1a2b3c4d.southeastasia.azurecontainerapps.io`). Từ đây gọi là `DOMAIN`. Địa chỉ mỗi app sẽ là `https://<tên app>.DOMAIN`, ví dụ `https://ca-api.DOMAIN`.
+Portal hiện **không có nút tạo riêng** environment (trang *Container Apps Environments* chỉ liệt kê, không có **+ Create**). Environment được tạo **cùng lúc với app đầu tiên** ở bước 11.3, nên ở đây chưa làm gì. Sau khi có app đầu tiên bạn sẽ biết **Default domain** (dạng `happy-sea-1a2b3c4d.southeastasia.azurecontainerapps.io`), gọi là `DOMAIN`; địa chỉ mỗi app là `https://<tên app>.DOMAIN`, ví dụ `https://ca-api.DOMAIN`. Vì vậy `DOMAIN` chưa có trong file `kpdl.env` lúc này.
 
 ## 7. [Portal] Máy ảo (VM)
 
@@ -215,7 +213,7 @@ export CF_API_TOKEN='<token Cloudflare Radar>'
 export ACR_NAME="kpdlacr$SUF"
 export ACR_LOGIN="$ACR_NAME.azurecr.io"
 export ACR_PW='<password của registry, trong Access keys>'
-export DOMAIN='<Default domain của kpdl-env>'
+export DOMAIN=''   # để trống, điền sau khi tạo ca-analysis ở bước 11.3
 
 export INGESTION_WAREHOUSE_DSN="postgresql://ingestion_user:$INGESTION_DB_PASSWORD@$PGHOST:5432/warehouse?sslmode=require"
 export LOGIC_WAREHOUSE_DSN="postgresql://logic_user:$LOGIC_DB_PASSWORD@$PGHOST:5432/warehouse?sslmode=require"
@@ -278,7 +276,7 @@ Ingestion có `restart: unless-stopped` nên tự chạy lại khi VM khởi đ�
 
 ## 11. [VM] Build image rồi [Portal] tạo Container Apps
 
-### 11.1 Build và đẩy image lên registry
+### 11.1 [VM] Build và đẩy image lên registry (các image chưa cần `DOMAIN`)
 
 Trong lúc ingestion chạy, build các image khác (giữ cửa sổ SSH mở; mỗi image vài phút):
 
@@ -289,35 +287,29 @@ for s in analysis api; do
   docker build -f services/$s/Dockerfile -t $ACR_LOGIN/kpdl-$s:v1 . && docker push $ACR_LOGIN/kpdl-$s:v1
 done
 
-docker build -f frontend/Dockerfile \
-  --build-arg NEXT_PUBLIC_API_URL=https://ca-api.$DOMAIN \
-  --build-arg NEXT_PUBLIC_DATA_MODE=api \
-  -t $ACR_LOGIN/kpdl-web:v1 frontend && docker push $ACR_LOGIN/kpdl-web:v1
-
 for s in clustering prediction; do
   docker build -f services/$s/Dockerfile -t $ACR_LOGIN/kpdl-$s:v1 .
 done
 docker build -f training/Dockerfile --target trainer -t $ACR_LOGIN/kpdl-trainer:v1 .
 ```
 
-- Build `web` chạy luôn test đơn vị, lint và `next build`, mất vài phút. `NEXT_PUBLIC_API_URL` nhúng lúc build: nếu đổi `DOMAIN` hoặc tên `ca-api` thì phải build lại `web`.
-- Hai image `clustering` và `prediction` chỉ build tại VM, **chưa đẩy lên registry**: ở bước 11.4 ta đóng gói mô hình vào rồi mới đẩy.
+- Hai image `clustering` và `prediction` chỉ build tại VM, **chưa đẩy lên registry**: ở bước 11.5 ta đóng gói mô hình vào rồi mới đẩy.
+- Image `web` build ở bước 11.4, vì cần `DOMAIN`.
 
-Lệnh in các giá trị cần dán vào Portal ở bước tiếp theo:
+In các giá trị cần dán vào Portal ở các bước sau:
 
 ```bash
 echo "WAREHOUSE_DSN (logic): $LOGIC_WAREHOUSE_DSN"
 echo "MART_DSN (logic):      $LOGIC_MART_DSN"
 echo "MART_DSN (api):        $API_MART_DSN"
 echo "JOB_TRIGGER_TOKEN:     $JOB_TRIGGER_TOKEN"
-echo "DOMAIN:                $DOMAIN"
 ```
 
 ### 11.2 [Portal] Cách tạo một Container App (áp dụng cho mọi app)
 
 **Create a resource**, tìm **Container App** và chọn thẻ **Container App** của *Microsoft* (loại Azure Service). Không chọn *Container App Job*, *Container App Session Pool* hay các thẻ của hãng khác. Bấm **Create**.
 
-- **Basics**: Resource group `kpdl-rg`; Container app name theo bảng; Region cùng region; **Container Apps Environment = `kpdl-env`**.
+- **Basics**: Resource group `kpdl-rg`; Container app name theo bảng; Region cùng region; **Container Apps Environment**: app đầu tiên (11.3) bấm **Create new** (xem 11.3), các app sau chọn `kpdl-env` có sẵn.
 - **Container**: bỏ tick **Use quickstart image**. Image source **Azure Container Registry**; Registry `kpdlacrSUF` (nếu hỏi cách xác thực, chọn admin credentials / Secrets); Image và Image tag theo bảng; CPU and Memory theo bảng; thêm **Environment variables** theo bảng (kiểu **Manual entry**).
 - **Ingress**: **Enabled**, Ingress traffic **Accepting traffic from anywhere**, Ingress type HTTP, **Target port** theo bảng.
 - **Review + create → Create.**
@@ -325,25 +317,51 @@ echo "DOMAIN:                $DOMAIN"
 
 Tên app phải **đúng như bảng** (địa chỉ có dạng `https://<tên app>.DOMAIN`, các app gọi nhau bằng địa chỉ này).
 
-### 11.3 [Portal] Ba app đầu: `ca-analysis`, `ca-api`, `ca-web`
+### 11.3 [Portal] Tạo `ca-analysis` đầu tiên (tạo luôn environment) và lấy `DOMAIN`
 
-Chưa cần mô hình, tạo ngay:
+Làm theo 11.2 với bảng sau:
 
 | App | Image : tag | Port | CPU / RAM | Min / Max replicas |
 | :--- | :--- | :--- | :--- | :--- |
 | `ca-analysis` | `kpdl-analysis` : `v1` | 8001 | 0.5 / 1 Gi | 1 / 1 |
-| `ca-api` | `kpdl-api` : `v1` | 8000 | 0.25 / 0.5 Gi | 0 / 1 |
-| `ca-web` | `kpdl-web` : `v1` | 3000 | 0.25 / 0.5 Gi | 0 / 1 |
 
-**Biến môi trường `ca-analysis`** (`ca-prediction` và `ca-clustering` ở bước sau dùng đúng bộ này):
+Ở tab Basics, mục *Container Apps Environment* bấm **Create new**: tên `kpdl-env`, Environment type **Consumption only**, Zone redundancy tắt; tab Monitoring giữ mặc định (có Log Analytics để xem log khi gặp lỗi); **Create**.
+
+**Biến môi trường `ca-analysis`** (`ca-prediction` và `ca-clustering` ở 11.6 dùng đúng bộ này):
 
 | Tên biến | Giá trị |
 | :--- | :--- |
-| `WAREHOUSE_DSN` | DSN warehouse của `logic_user` (lệnh `echo` phía trên) |
+| `WAREHOUSE_DSN` | DSN warehouse của `logic_user` (lệnh `echo` ở 11.1) |
 | `MART_DSN` | DSN mart của `logic_user` |
 | `JOB_TRIGGER_TOKEN` | token job |
 | `SCHEDULER_ENABLED` | `false` |
 | `TZ_LOCAL` | `Asia/Ho_Chi_Minh` |
+
+Tạo xong, vào app → **Overview** xem **Application Url**, dạng `https://ca-analysis.<DOMAIN>`. Phần sau `ca-analysis.` chính là `DOMAIN`. Điền vào file cấu hình trên VM:
+
+```bash
+nano ~/kpdl.env        # sửa dòng export DOMAIN='' thành giá trị thật, lưu bằng Ctrl+O, Enter, Ctrl+X
+source ~/kpdl.env
+echo $DOMAIN
+```
+
+### 11.4 [VM] Build `web` (cần `DOMAIN`) rồi [Portal] tạo `ca-api`, `ca-web`
+
+```bash
+docker build -f frontend/Dockerfile \
+  --build-arg NEXT_PUBLIC_API_URL=https://ca-api.$DOMAIN \
+  --build-arg NEXT_PUBLIC_DATA_MODE=api \
+  -t $ACR_LOGIN/kpdl-web:v1 frontend && docker push $ACR_LOGIN/kpdl-web:v1
+```
+
+Build `web` chạy luôn test đơn vị, lint và `next build`, mất vài phút. `NEXT_PUBLIC_API_URL` nhúng lúc build: nếu đổi `DOMAIN` hoặc tên `ca-api` thì phải build lại `web`.
+
+Rồi tạo hai app theo 11.2 (environment chọn `kpdl-env` có sẵn):
+
+| App | Image : tag | Port | CPU / RAM | Min / Max replicas |
+| :--- | :--- | :--- | :--- | :--- |
+| `ca-api` | `kpdl-api` : `v1` | 8000 | 0.25 / 0.5 Gi | 0 / 1 |
+| `ca-web` | `kpdl-web` : `v1` | 3000 | 0.25 / 0.5 Gi | 0 / 1 |
 
 **Biến môi trường `ca-api`:**
 
@@ -361,7 +379,7 @@ Chưa cần mô hình, tạo ngay:
 
 (Thay `DOMAIN` bằng Default domain thật. Các DSN và token nhập thẳng vào ô giá trị cho đơn giản; chấp nhận được với đồ án ngắn hạn. Muốn kín hơn thì dùng mục **Secrets** của app rồi chọn *Reference a secret*.)
 
-### 11.4 [VM] Huấn luyện mô hình rồi đóng gói vào image
+### 11.5 [VM] Huấn luyện mô hình rồi đóng gói vào image
 
 Chỉ làm khi bước 10 đã cho kết quả ít nhất **30 ngày** Silver (cột `min(ts)` cách `max(ts)` từ 30 ngày trở lên). Chưa đủ thì chờ backfill chạy tiếp, trainer sẽ từ chối huấn luyện.
 
@@ -379,9 +397,9 @@ for s in clustering prediction; do
 done
 ```
 
-### 11.5 [Portal] Hai app còn lại: `ca-prediction`, `ca-clustering`
+### 11.6 [Portal] Hai app còn lại: `ca-prediction`, `ca-clustering`
 
-Tạo như 11.2, **dùng tag `v1-models`**:
+Tạo như 11.2, **dùng tag `v1-models`** (environment chọn `kpdl-env`):
 
 | App | Image : tag | Port | CPU / RAM | Min / Max replicas |
 | :--- | :--- | :--- | :--- | :--- |
@@ -460,7 +478,7 @@ Chụp màn hình các bước này và Portal đang hiện bốn loại dịch 
 
 ## 15. Cập nhật phiên bản
 
-SSH vào VM, `cd ~/KPDL-NHOM-6 && source ~/kpdl.env`, `git pull`, build lại image với tag mới (ví dụ `v2`) rồi đẩy lên registry. Trên Portal, vào app → **Application → Containers → Edit and deploy**, đổi tag của image rồi Create. Huấn luyện lại mô hình: lặp lại bước 11.4, đẩy `:v2-models`, đổi tag cho `ca-prediction` và `ca-clustering`. Ingestion trên VM: `docker build ... -t $ACR_LOGIN/kpdl-ingestion:v1 .` rồi `dc up -d --force-recreate ingestion`.
+SSH vào VM, `cd ~/KPDL-NHOM-6 && source ~/kpdl.env`, `git pull`, build lại image với tag mới (ví dụ `v2`) rồi đẩy lên registry. Trên Portal, vào app → **Application → Containers → Edit and deploy**, đổi tag của image rồi Create. Huấn luyện lại mô hình: lặp lại bước 11.5, đẩy `:v2-models`, đổi tag cho `ca-prediction` và `ca-clustering`. Ingestion trên VM: `docker build ... -t $ACR_LOGIN/kpdl-ingestion:v1 .` rồi `dc up -d --force-recreate ingestion`.
 
 ## 16. Xử lý sự cố
 
@@ -480,7 +498,7 @@ SSH vào VM, `cd ~/KPDL-NHOM-6 && source ~/kpdl.env`, `git pull`, build lại im
 | Function báo timeout | App đang khởi động lạnh quá lâu: đặt Min replicas = 1 cho app đó. Không tự thử lại vì yêu cầu có thể đã được nhận |
 | App bị `OOMKilled` | Tăng CPU/RAM của app ở **Containers → Edit and deploy** |
 | Ingestion không có dữ liệu | `dc logs --tail 50 ingestion`; kiểm tra `CF_API_TOKEN` |
-| Trainer dừng vì Silver ít hơn 30 ngày | Chờ backfill chạy xong rồi chạy lại 11.4 |
+| Trainer dừng vì Silver ít hơn 30 ngày | Chờ backfill chạy xong rồi chạy lại 11.5 |
 
 ## 17. Lưu ý bảo mật
 
