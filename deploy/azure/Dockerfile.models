@@ -1,0 +1,7 @@
+# Đóng gói mô hình đã huấn luyện (models/*.joblib) vào image clustering/prediction.
+# Docker Compose mount ./models, còn Container Apps thì không, nên mô hình đi cùng image.
+# Build với context là thư mục chứa các file .joblib:
+#   docker build -f deploy/azure/Dockerfile.models --build-arg BASE=<image gốc> -t <image mới> models
+ARG BASE
+FROM ${BASE}
+COPY *.joblib /app/models/

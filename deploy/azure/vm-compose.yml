@@ -1,0 +1,29 @@
+# Chạy trên VM Azure: chỉ Data Ingestion (chạy liên tục + backfill nền) và trainer (huấn luyện một lần).
+# Image lấy từ Azure Container Registry. Các biến ${...} đọc từ file .env cùng thư mục.
+name: kpdl-vm
+
+services:
+  ingestion:
+    image: ${ACR_LOGIN}/kpdl-ingestion:${IMAGE_TAG:-v1}
+    restart: unless-stopped
+    environment:
+      WAREHOUSE_DSN: ${INGESTION_WAREHOUSE_DSN}
+      CF_API_TOKEN: ${CF_API_TOKEN}
+      JOB_TRIGGER_TOKEN: ${JOB_TRIGGER_TOKEN}
+      SCHEDULER_ENABLED: "true"
+      TZ_LOCAL: Asia/Ho_Chi_Minh
+      INGESTION_INTERVAL_SECONDS: ${INGESTION_INTERVAL_SECONDS:-300}
+      BACKFILL_TARGET_DAYS: ${BACKFILL_TARGET_DAYS:-365}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  trainer:
+    profiles: [training]
+    image: ${ACR_LOGIN}/kpdl-trainer:${IMAGE_TAG:-v1}
+    environment:
+      WAREHOUSE_DSN: ${LOGIC_WAREHOUSE_DSN}
+    volumes: ["./models:/app/models"]
