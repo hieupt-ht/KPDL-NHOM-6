@@ -1,8 +1,13 @@
-# Deploy thủ công lên Azure: VM + Functions + Container Apps + PostgreSQL
+# Deploy lên Azure bằng Portal: VM + Functions + Container Apps + PostgreSQL
 
-Slide của thầy (mục điểm cộng) gợi ý bộ Azure: **VM + Function + Container Apps + Azure PostgreSQL**. Tài liệu này chia hệ thống hiện có thành đúng bốn dịch vụ đó và hướng dẫn dựng bằng tay. Mọi lệnh viết cho **bash** (Linux, macOS, WSL hoặc Git Bash) và dùng Azure CLI.
+Theo mục điểm cộng trong slide của thầy: **VM + Function + Container Apps + Azure PostgreSQL**. Cách làm:
 
-> **Trạng thái kiểm chứng.** Đã chạy thử trên máy phát triển: script `deploy/azure/init-managed-db.sh` (hai database trên một PostgreSQL 16, chạy hai lần), phân quyền role, `deploy/azure/vm-compose.yml`, `deploy/azure/Dockerfile.models`, test của Function và test CORS của API. **Chưa chạy trên Azure thật**: các lệnh `az` dưới đây viết theo tài liệu CLI và có thể lệch theo phiên bản CLI hoặc chính sách subscription sinh viên. Gặp lỗi thì xem mục 12.
+- **Portal** (web Azure): bấm tạo từng dịch vụ.
+- **VM**: mọi lệnh (khởi tạo database, build image, huấn luyện mô hình) chạy trong **một cửa sổ SSH vào VM**. Không cần cài Docker hay Azure CLI trên máy bạn.
+- **Cloud Shell** (nút `>_` trên Portal): chỉ dùng một lần để đưa mã Function lên.
+
+> **Trạng thái kiểm chứng.** Đã chạy thử trên máy phát triển: script `deploy/azure/init-managed-db.sh` (hai database trên một PostgreSQL 16, chạy hai lần), phân quyền role, `deploy/azure/vm-compose.yml`, `deploy/azure/Dockerfile.models`, test của Function và test CORS của API. **Chưa chạy trên Azure thật**: tên nút trên Portal có thể lệch chút, chính sách tài khoản sinh viên có thể chặn một số region hoặc size VM. Gặp lỗi xem mục 14.
+> Bản hướng dẫn dùng lệnh `az` trước đây vẫn xem được ở commit `97b8429` (lịch sử git).
 
 ## 1. Kiến trúc
 
@@ -10,7 +15,7 @@ Slide của thầy (mục điểm cộng) gợi ý bộ Azure: **VM + Function +
 Cloudflare Radar
       │ 5 phút/lần
       ▼
-VM (Docker): ingestion ───────────────► PostgreSQL Flexible Server
+VM (Docker): ingestion ───────────────► PostgreSQL Flexible Server (1 server)
                                           ├─ database warehouse (bronze, silver)
 Functions (timer) ── POST /run ─┐         └─ database mart (gold)
   • analysis   5 phút             ▼                ▲        ▲
@@ -24,366 +29,461 @@ Trình duyệt ──► Container Apps: ca-web ──► ca-api ─────
 
 | Yêu cầu của thầy | Thành phần Azure | Chạy gì |
 | :--- | :--- | :--- |
-| VM | Virtual Machine Ubuntu | `ingestion` (chạy liên tục vì có luồng backfill nền) và `trainer` (huấn luyện một lần) |
-| Function | Azure Functions, timer trigger | Hẹn giờ `POST /run`: analysis và prediction 5 phút, clustering mỗi ngày 00:30 giờ VN |
+| VM | Virtual Machine Ubuntu | `ingestion` (chạy liên tục, có luồng backfill nền) và `trainer` (huấn luyện một lần); đồng thời là nơi build image |
+| Function | Azure Functions, timer | Hẹn giờ `POST /run`: analysis và prediction mỗi 5 phút, clustering mỗi ngày 00:30 giờ VN |
 | Container Apps | Container Apps (Consumption) | `ca-analysis`, `ca-prediction`, `ca-clustering`, `ca-api`, `ca-web` |
 | Azure PostgreSQL | Flexible Server (Burstable) | **Một server, hai database** `warehouse` và `mart`, vẫn tách ba user theo ranh giới ghi dữ liệu |
 
 Điểm cần biết:
 
-- Các service backend chạy với `SCHEDULER_ENABLED=false`; Functions thay APScheduler. Logic, khóa chạy và nhật ký `gold.service_runs` vẫn do `common.runner` quản lý, nên bấm **Chạy lại** ở `/admin` vẫn hoạt động như cũ.
-- Ingestion giữ `SCHEDULER_ENABLED=true` trên VM vì luồng backfill 365 ngày chỉ khởi động ở chế độ này.
-- Web và API ở hai domain khác nhau nên API đọc danh sách origin từ biến `CORS_ORIGINS` (thêm vào code trong cùng đợt thay đổi này).
-- Mô hình (`*.joblib`) không nằm trong git. Huấn luyện một lần trên VM rồi **đóng gói vào image** clustering/prediction (`deploy/azure/Dockerfile.models`), vì Container Apps không mount `./models` như Compose.
+- Các service backend chạy `SCHEDULER_ENABLED=false`; Function thay APScheduler. Bấm **Chạy lại** ở `/admin` vẫn hoạt động như cũ.
+- Ingestion giữ `SCHEDULER_ENABLED=true` trên VM vì luồng backfill 365 ngày chỉ chạy ở chế độ này.
+- Web và API khác domain nên API đọc danh sách origin từ biến `CORS_ORIGINS`.
+- Mô hình (`*.joblib`) không nằm trong git: huấn luyện một lần trên VM rồi **đóng gói vào image** `ca-prediction` và `ca-clustering`.
 
 ## 2. Chi phí (ước tính, cần tự kiểm tra bằng Pricing Calculator)
 
-Chỉ tính khi chạy liên tục 24/7. Giá USD của Container Apps trên trang chính thức không lấy được tự động, nên phần này dùng đơn giá mình nhớ (idle ~0,000003 USD/vCPU-giây và /GiB-giây), chưa xác minh.
-
-| Thành phần | Cấu hình đề xuất | Ước tính/tháng |
+| Thành phần | Cấu hình | Ước tính/tháng nếu bật 24/7 |
 | :--- | :--- | :--- |
-| Container Apps | `ca-analysis`, `ca-prediction`: 0,5 vCPU / 1 GiB, luôn bật 1 bản sao (~12 USD mỗi cái). `ca-clustering`, `ca-api`, `ca-web`: scale về 0 khi rảnh (~0). Có [miễn phí hằng tháng](https://learn.microsoft.com/azure/container-apps/billing) 180.000 vCPU-giây, 360.000 GiB-giây, 2 triệu request | ~25 (bật luôn cả 3 app còn lại: ~40) |
-| PostgreSQL Flexible B1ms, 32 GB | Azure for Students có [ưu đãi 750 giờ B1ms + 32 GB trong 12 tháng](https://azure.microsoft.com/free/students) | 0 nếu áp dụng được, khoảng 15–20 nếu không |
-| VM | `Standard_B1s` (hoặc size 1 GiB còn khả dụng), ổ 30 GB Standard SSD, IP tĩnh | ~0–8 (VM) + ~6 (đĩa, IP) |
+| VM `Standard_B2s` (4 GiB) + ổ 64 GiB | cần 4 GiB để build frontend | ~35 (hạ xuống size nhỏ sau khi build xong thì ít hơn) |
+| PostgreSQL B1ms, 32 GiB | một server | 0 nếu dùng được [ưu đãi 12 tháng của gói sinh viên](https://azure.microsoft.com/free/students), khoảng 15–20 nếu không |
+| Container Apps | `ca-analysis`, `ca-prediction` luôn bật 1 bản sao (~12 mỗi cái); 3 app còn lại về 0 khi rảnh | ~25 (đơn giá lấy theo trí nhớ, chưa xác minh) |
 | Container Registry Basic | | ~5 |
-| Functions (Consumption) + Storage | timer 5 phút ~26.000 lượt/tháng, nằm trong [gói miễn phí 1 triệu lượt](https://azure.microsoft.com/en-us/pricing/details/functions/) | ~1 |
+| Functions + Storage | timer 5 phút, trong [gói miễn phí](https://azure.microsoft.com/en-us/pricing/details/functions/) | ~1 |
 
-Cộng lại khoảng **35–65 USD/tháng nếu bật liên tục**, tức ngân sách 96 USD chỉ đủ khoảng 1,5–2,5 tháng. Vì vậy dựng, kiểm thử, rồi **thu nhỏ hoặc tắt** khi không dùng (mục 10) và **xóa cả resource group** sau buổi chấm. Đặt budget cảnh báo ở Cost Management trước khi làm gì khác.
+Tổng khoảng **60–90 USD/tháng nếu bật liên tục**, tức ~2–3 USD/ngày. Ngân sách 96 USD đủ cho vài ngày demo nhưng **không đủ chạy cả tháng**. Làm xong và quay video/chụp màn hình thì tắt (mục 12), và **xóa cả resource group** sau buổi chấm.
 
-## 3. Chuẩn bị
+## 3. Chuẩn bị (10 phút)
 
-- Máy có `az` (đã `az login`), `docker`, `ssh`/`scp`, `psql` (hoặc dùng Azure Cloud Shell cho các lệnh không cần Docker), `python3`, `openssl`.
-- `CF_API_TOKEN` của Cloudflare Radar (token chỉ đọc).
-- Chọn **một region** mà subscription cho phép và có đủ PostgreSQL, Container Apps, Functions và VM. Sinh viên hay gặp lỗi chính sách region hoặc [size VM bị chặn](https://learn.microsoft.com/en-us/answers/questions/5640602/azure-for-students-cannot-create-vm-due-to-region). Thử `southeastasia`, không được thì đổi region và làm lại từ đầu mục này.
+1. Mở Notepad và ghi các giá trị dưới đây. Bạn sẽ dùng lại nhiều lần.
 
-Tạo file `~/kpdl-azure.env` **một lần duy nhất** (ngoài repo, không commit). Lệnh dưới sinh giá trị ngẫu nhiên rồi ghi **giá trị cố định** vào file; về sau chỉ `source` file này ở mỗi phiên mới, đừng chạy lại lệnh tạo:
+| Tên | Giá trị |
+| :--- | :--- |
+| `SUF` | 4 ký tự ngẫu nhiên viết thường/số, ví dụ `x7k2` (để tên không trùng người khác) |
+| Region | `Southeast Asia` (nếu bị chặn thì dùng region khác cho **mọi** dịch vụ) |
+| Resource group | `kpdl-rg` |
+| PostgreSQL | server `kpdl-pg-SUF`, admin `pgadmin` |
+| Mật khẩu admin | tự đặt, từ 16 ký tự, có chữ hoa, thường, số và `-`. Không dùng `@ : / ? # %` |
+| 3 mật khẩu ứng dụng | `INGESTION_DB_PASSWORD`, `LOGIC_DB_PASSWORD`, `API_DB_PASSWORD`: **chỉ chữ và số**, từ 20 ký tự, mỗi cái khác nhau (chúng nằm trong chuỗi kết nối dạng URL) |
+| `JOB_TRIGGER_TOKEN` | chuỗi chữ và số dài từ 32 ký tự (token chung giữa API, Function và các service) |
+| `CF_API_TOKEN` | token Cloudflare Radar (quyền Account → Radar → Read) |
 
-```bash
-SUF=$(openssl rand -hex 3)                   # hậu tố để tên toàn cầu không trùng
-cat > ~/kpdl-azure.env <<EOF
-export LOC=southeastasia
-export SUF=$SUF
-export RG=kpdl-rg
-export PG=kpdl-pg-$SUF
-export ACR=kpdlacr$SUF
-export CAE=kpdl-env
-export STG=kpdlstg$SUF
-export FUNC=kpdl-func-$SUF
-export VM=kpdl-vm
+Các giá trị này độc lập với `.env` chạy local. Quy tắc của Azure: tên admin không được là `admin`, `administrator`, `root`, `guest`, `public`, `azure_superuser` hoặc bắt đầu bằng `pg_`; mật khẩu admin dài 8–128 ký tự và có ký tự từ ít nhất 3 trong 4 nhóm.
 
-export PGADMIN=pgadmin
-export PGADMIN_PW='Aa1-$(openssl rand -hex 16)'
-export INGESTION_DB_PASSWORD='$(openssl rand -hex 16)'
-export LOGIC_DB_PASSWORD='$(openssl rand -hex 16)'
-export API_DB_PASSWORD='$(openssl rand -hex 16)'
-export JOB_TRIGGER_TOKEN='$(openssl rand -hex 24)'
-export CF_API_TOKEN='<dán token Radar thật vào đây>'
-EOF
-chmod 600 ~/kpdl-azure.env
-nano ~/kpdl-azure.env                        # thay CF_API_TOKEN bằng token thật rồi lưu
-source ~/kpdl-azure.env
-```
+2. (Khuyên làm) Portal → **Cost Management + Billing → Budgets → Add**: phạm vi subscription, ngân sách 60 USD, cảnh báo 50% và 80% qua email.
 
-Các tên và mật khẩu này **độc lập với `.env` chạy local**. Trên Azure chỉ có **một** PostgreSQL server với **một** tài khoản quản trị (`PGADMIN`), chứa hai database `warehouse` và `mart`; không dùng các biến `WAREHOUSE_ADMIN_*` và `MART_ADMIN_*` của Compose. Ba mật khẩu `INGESTION_DB_PASSWORD`, `LOGIC_DB_PASSWORD`, `API_DB_PASSWORD` do script ở bước 4 gán cho ba user ứng dụng; `JOB_TRIGGER_TOKEN` là token chung giữa API/Function và các service `/run`.
+## 4. [Portal] Resource group
 
-Quy tắc của Azure cho tài khoản quản trị: tên không được là `admin`, `administrator`, `root`, `guest`, `public`, `azure_superuser` hoặc bắt đầu bằng `pg_`; mật khẩu dài 8 đến 128 ký tự và có ký tự từ ít nhất 3 trong 4 nhóm (chữ hoa, chữ thường, số, ký tự đặc biệt). Vì vậy `PGADMIN_PW` có tiền tố `Aa1-`. Ba mật khẩu ứng dụng chỉ dùng hex để không có ký tự đặc biệt (chúng nằm trong chuỗi kết nối dạng URL). Nếu tạo server bằng Portal, nhập đúng `PGADMIN` và `PGADMIN_PW` trong file này vào ô Admin username và Password.
+**Resource groups → Create**: tên `kpdl-rg`, Region `Southeast Asia`. Mọi tài nguyên sau này đặt trong group này để cuối cùng xóa một lần là sạch.
 
-Đăng ký provider (một lần):
+Nếu gặp lỗi "subscription is not registered to use namespace ...": **Subscriptions → (subscription của bạn) → Resource providers**, tìm tên trong lỗi (ví dụ `Microsoft.App`) rồi **Register**.
 
-```bash
-for p in Microsoft.App Microsoft.OperationalInsights Microsoft.DBforPostgreSQL \
-         Microsoft.ContainerRegistry Microsoft.Web Microsoft.Storage Microsoft.Compute; do
-  az provider register -n $p --wait
-done
-az extension add -n containerapp --upgrade
-az group create -n $RG -l $LOC
-```
+## 5. [Portal] PostgreSQL Flexible Server (chỉ tạo MỘT server)
 
-## 4. PostgreSQL
+**Create a resource → Azure Database for PostgreSQL flexible server → Create**.
 
-```bash
-az postgres flexible-server create -g $RG -n $PG -l $LOC \
-  --tier Burstable --sku-name Standard_B1ms --storage-size 32 --version 16 \
-  --admin-user $PGADMIN --admin-password "$PGADMIN_PW" \
-  --public-access 0.0.0.0 --yes
-```
+**Tab Basics**
 
-Nếu tạo bằng Portal: ở mục **Compute + storage** chọn **Storage type = Premium SSD** (không phải **Premium SSD v2**). Premium SSD v2 làm mờ tầng **Burstable** ("Burstable compute tier is not supported for server with Premium SSD v2"), khi đó chỉ còn General Purpose từ 2 vCore, đắt hơn nhiều. Lệnh `az` ở trên dùng Premium SSD mặc định nên không gặp lỗi này.
+| Ô | Giá trị |
+| :--- | :--- |
+| Resource group | `kpdl-rg` |
+| Server name | `kpdl-pg-SUF` |
+| Region | cùng region đã chọn |
+| PostgreSQL version | 16 |
+| Workload type | Development |
+| High availability | tắt |
+| Authentication method | PostgreSQL authentication only |
+| Admin username / Password | `pgadmin` / mật khẩu admin trong Notepad |
 
-`--public-access 0.0.0.0` bật quy tắc "cho phép dịch vụ Azure" để Container Apps, Functions và VM kết nối được mà không cần VNet (rẻ hơn). Đổi lại, server có endpoint công khai: dựa vào mật khẩu mạnh và TLS (`sslmode=require`). Thêm IP máy bạn để chạy `psql`:
+Ở dòng **Compute + storage** bấm **Configure server** và đặt **theo thứ tự này**:
 
-```bash
-MYIP=$(curl -s https://api.ipify.org)
-az postgres flexible-server firewall-rule create -g $RG -n $PG --rule-name my-pc \
-  --start-ip-address $MYIP --end-ip-address $MYIP
-```
+1. **Storage type = Premium SSD** (không phải *Premium SSD v2*; v2 làm mờ tầng Burstable).
+2. **Compute tier = Burstable**, **Compute size = Standard_B1ms** (1 vCore, 2 GiB).
+3. **Storage size = 32 GiB**. Giữ backup 7 ngày; không bật Geo-redundancy.
+4. Bảng **Estimated costs** bên phải phải ở mức vài chục USD/tháng trở xuống, không có dòng High availability. Đúng thì **Save**.
 
-Tạo database, schema, role và quyền (từ thư mục gốc repo; script chạy lại nhiều lần vẫn an toàn):
+**Tab Networking**
 
-```bash
-PGHOST=$PG.postgres.database.azure.com PGUSER=$PGADMIN PGPASSWORD="$PGADMIN_PW" \
-  bash deploy/azure/init-managed-db.sh
-```
+- Connectivity method: **Public access**.
+- Tick **Allow public access from any Azure service within Azure to this server** (để VM, Container Apps và Function kết nối được).
+- Không cần thêm IP của bạn: lệnh khởi tạo chạy từ VM.
 
-Script tạo `warehouse` và `mart`, rồi dùng lại đúng `db/*/init/02-users.sh` của Compose nên ranh giới quyền giữ nguyên: `ingestion_user` ghi Bronze/Silver, `logic_user` đọc Silver và ghi Gold, `api_user` chỉ đọc Gold.
+**Review + create → Create.** Server có địa chỉ `kpdl-pg-SUF.postgres.database.azure.com`. Không cần tạo database ở đây, script ở bước 9 sẽ tạo `warehouse` và `mart`.
 
-Chuỗi kết nối cho các bước sau:
+> Quy tắc "cho phép mọi dịch vụ Azure" nghĩa là server có địa chỉ công khai. Bảo vệ bằng mật khẩu mạnh và SSL (`sslmode=require` trong mọi chuỗi kết nối). Với đồ án ngắn hạn thì chấp nhận được; xong thì xóa resource group.
 
-```bash
-H=$PG.postgres.database.azure.com
-export INGESTION_WAREHOUSE_DSN="postgresql://ingestion_user:$INGESTION_DB_PASSWORD@$H:5432/warehouse?sslmode=require"
-export LOGIC_WAREHOUSE_DSN="postgresql://logic_user:$LOGIC_DB_PASSWORD@$H:5432/warehouse?sslmode=require"
-export LOGIC_MART_DSN="postgresql://logic_user:$LOGIC_DB_PASSWORD@$H:5432/mart?sslmode=require"
-export API_MART_DSN="postgresql://api_user:$API_DB_PASSWORD@$H:5432/mart?sslmode=require"
-```
+## 6. [Portal] Container Registry và Container Apps environment
 
-## 5. Registry, môi trường Container Apps, build image
+**Container Registry**
 
-Container Registry. `az acr build` thường **không dùng được** với tài khoản sinh viên ([lỗi `TasksOperationsNotAllowed`](https://learn.microsoft.com/en-us/answers/questions/1661967/does-the-azure-for-students-subscription-allow-one)), nên build ở máy bạn rồi push:
+1. **Create a resource → Container Registry**: tên `kpdlacrSUF` (chỉ chữ thường và số), Resource group `kpdl-rg`, cùng region, Pricing plan **Basic**. Create.
+2. Vào registry → **Settings → Access keys → Admin user: Enabled**. Ghi lại **Login server** (`kpdlacrsuf.azurecr.io`), **Username** và **password** (cái đầu tiên).
 
-```bash
-az acr create -g $RG -n $ACR -l $LOC --sku Basic --admin-enabled true
-export ACR_LOGIN=$(az acr show -n $ACR --query loginServer -o tsv)
-export ACR_PW=$(az acr credential show -n $ACR --query "passwords[0].value" -o tsv)
-echo "$ACR_PW" | docker login $ACR_LOGIN -u $ACR --password-stdin
-```
+**Container Apps environment**
 
-Tạo môi trường Container Apps trước để biết tên miền, vì frontend nhúng `NEXT_PUBLIC_API_URL` lúc build:
+1. **Create a resource → Container Apps Environment**: tên `kpdl-env`, Resource group `kpdl-rg`, cùng region, loại **Consumption only**. Giữ mặc định tab Monitoring (tạo Log Analytics để xem log khi gặp lỗi). Create.
+2. Vào environment → **Overview**, ghi lại **Default domain** (dạng `happy-sea-1a2b3c4d.southeastasia.azurecontainerapps.io`). Từ đây gọi là `DOMAIN`. Địa chỉ mỗi app sẽ là `https://<tên app>.DOMAIN`, ví dụ `https://ca-api.DOMAIN`.
 
-```bash
-az containerapp env create -g $RG -n $CAE -l $LOC --logs-destination none
-export DOMAIN=$(az containerapp env show -g $RG -n $CAE --query properties.defaultDomain -o tsv)
-export API_URL=https://ca-api.$DOMAIN
-export WEB_URL=https://ca-web.$DOMAIN
-echo "$API_URL  $WEB_URL"
-```
+## 7. [Portal] Máy ảo (VM)
 
-`--logs-destination none` tránh tạo Log Analytics (tiết kiệm); xem log trực tiếp bằng `az containerapp logs show -g $RG -n <app> --tail 50`. Cần log lịch sử thì bỏ cờ này.
+**Create a resource → Virtual machine → Create**.
 
-Build và push 7 image (chạy từ thư mục gốc repo; `--platform linux/amd64` để image chạy được cả khi bạn build trên máy Arm):
+| Ô | Giá trị |
+| :--- | :--- |
+| Resource group | `kpdl-rg` |
+| Virtual machine name | `kpdl-vm` |
+| Region | cùng region |
+| Image | **Ubuntu Server 24.04 LTS - x64 Gen2** |
+| Size | **Standard_B2s** (cần ≥ 4 GiB RAM để build frontend). Nếu không có, chọn size x64 khác có ≥ 4 GiB (B2s_v2, B2as_v2...). **Không** chọn size Arm (tên có chữ `p`, ví dụ B2ps) |
+| Authentication type | SSH public key |
+| Username | `azureuser` |
+| SSH public key source | **Generate new key pair**, tên `kpdl-vm_key` |
+| Public inbound ports | Allow selected ports → **SSH (22)** |
+
+- Tab **Disks**: OS disk type **Standard SSD**, OS disk size **64 GiB**.
+- **Không** bật Auto-shutdown ở tab Management (ingestion phải chạy liên tục).
+- Bấm **Review + create → Create**. Hộp thoại hiện ra: chọn **Download private key and create resource**. File `kpdl-vm_key.pem` được lưu vào thư mục Downloads. **Giữ file này**, mất là không vào được VM.
+
+Xong vào VM → **Overview**, ghi lại **Public IP address**.
+
+## 8. [VM] Kết nối, cài công cụ, tạo file cấu hình
+
+### 8.1 SSH vào VM
+
+Mac/Linux (Terminal):
 
 ```bash
-build() { # build <tên> <dockerfile> [tham số khác của docker build]
-  local name=$1 file=$2; shift 2
-  docker build --platform linux/amd64 -f "$file" -t "$ACR_LOGIN/kpdl-$name:v1" "$@" \
-    && docker push "$ACR_LOGIN/kpdl-$name:v1"
-}
-build api        services/api/Dockerfile        .
-build analysis   services/analysis/Dockerfile   .
-build clustering services/clustering/Dockerfile .
-build prediction services/prediction/Dockerfile .
-build ingestion  services/ingestion/Dockerfile  .
-build trainer    training/Dockerfile            --target trainer .
-build web        frontend/Dockerfile \
-  --build-arg NEXT_PUBLIC_API_URL=$API_URL --build-arg NEXT_PUBLIC_DATA_MODE=api frontend
+chmod 400 ~/Downloads/kpdl-vm_key.pem
+ssh -i ~/Downloads/kpdl-vm_key.pem azureuser@<IP của VM>
 ```
 
-Build `web` chạy luôn test đơn vị, lint và `next build`, mất vài phút. Đổi `API_URL` về sau thì phải build lại `web`.
+Windows (PowerShell):
 
-## 6. VM: ingestion và huấn luyện mô hình
+```powershell
+ssh -i "$HOME\Downloads\kpdl-vm_key.pem" azureuser@<IP của VM>
+```
 
-Tạo VM (size 1 GiB là đủ vì VM chỉ chạy ingestion và trainer; nếu `B1s` bị chặn, xem `az vm list-skus --location $LOC --size Standard_B -o table` cột `Restrictions`, và chọn size **x64**, không chọn size Arm vì image build `amd64`):
+Nếu Windows báo `UNPROTECTED PRIVATE KEY FILE`, chạy hai lệnh này rồi SSH lại:
+
+```powershell
+icacls "$HOME\Downloads\kpdl-vm_key.pem" /inheritance:r
+icacls "$HOME\Downloads\kpdl-vm_key.pem" /grant:r "$($env:USERNAME):(R)"
+```
+
+Lần đầu máy hỏi `Are you sure you want to continue connecting?` thì gõ `yes`. Dấu nhắc đổi thành `azureuser@kpdl-vm:~$` là bạn đã ở trong VM. **Từ bước này trở đi mọi lệnh gõ trong cửa sổ này.**
+
+### 8.2 Cài Docker, git, psql và bộ nhớ đệm swap
+
+Dán nguyên khối này, bấm Enter, chờ vài phút:
 
 ```bash
-az vm create -g $RG -n $VM -l $LOC \
-  --image Canonical:ubuntu-24_04-lts:server:latest --size Standard_B1s \
-  --admin-username azureuser --generate-ssh-keys \
-  --os-disk-size-gb 30 --storage-sku StandardSSD_LRS --public-ip-sku Standard
-az network nsg rule update -g $RG --nsg-name ${VM}NSG -n default-allow-ssh \
-  --source-address-prefixes $MYIP          # chỉ cho IP của bạn SSH
-export VMIP=$(az vm show -d -g $RG -n $VM --query publicIps -o tsv)
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER
+sudo apt-get install -y git postgresql-client
+sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+echo "/swapfile none swap sw 0 0" | sudo tee -a /etc/fstab
 ```
 
-Cài Docker, swap, đăng nhập registry:
+Dòng `usermod` chỉ có hiệu lực sau khi đăng nhập lại: gõ `exit` rồi SSH lại như 8.1. Dòng `swapon` giúp VM không hết RAM khi build frontend.
+
+### 8.3 Lấy mã nguồn
 
 ```bash
-ssh azureuser@$VMIP 'curl -fsSL https://get.docker.com | sudo sh && sudo usermod -aG docker azureuser \
-  && sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile \
-  && echo "/swapfile none swap sw 0 0" | sudo tee -a /etc/fstab'
-echo "$ACR_PW" | ssh azureuser@$VMIP "docker login $ACR_LOGIN -u $ACR --password-stdin"
+git clone -b feat/docker-azure-deploy https://github.com/hieupt-ht/KPDL-NHOM-6.git
+cd KPDL-NHOM-6
 ```
 
-(Lệnh `docker login` cuối chạy sau khi nhóm `docker` đã có hiệu lực; nếu báo permission denied thì thoát SSH rồi chạy lại, hoặc thêm `sudo`.)
+Nhánh `feat/docker-azure-deploy` có các script deploy và bản sửa CORS. Nếu repo là private, git sẽ hỏi tài khoản GitHub và mật khẩu; dùng Personal Access Token thay mật khẩu.
 
-Gửi file compose và `.env` lên VM:
+### 8.4 Tạo file cấu hình `~/kpdl.env`
+
+Mở trình soạn thảo: `nano ~/kpdl.env`. Dán khối dưới (chuột phải để dán), **thay các chỗ `<...>` bằng giá trị trong Notepad**, giữ nguyên dấu nháy đơn. Lưu: `Ctrl+O`, `Enter`, thoát: `Ctrl+X`.
 
 ```bash
-ssh azureuser@$VMIP 'mkdir -p ~/kpdl/models'
-scp deploy/azure/vm-compose.yml azureuser@$VMIP:~/kpdl/docker-compose.yml
-cat > /tmp/vm.env <<EOF
-ACR_LOGIN=$ACR_LOGIN
-INGESTION_WAREHOUSE_DSN=$INGESTION_WAREHOUSE_DSN
-LOGIC_WAREHOUSE_DSN=$LOGIC_WAREHOUSE_DSN
-CF_API_TOKEN=$CF_API_TOKEN
-JOB_TRIGGER_TOKEN=$JOB_TRIGGER_TOKEN
-EOF
-scp /tmp/vm.env azureuser@$VMIP:~/kpdl/.env && rm /tmp/vm.env
-ssh azureuser@$VMIP 'chmod 600 ~/kpdl/.env && cd ~/kpdl && docker compose up -d ingestion && docker compose logs --tail 20 ingestion'
+export SUF='x7k2'
+export PG="kpdl-pg-$SUF"
+export PGHOST="$PG.postgres.database.azure.com"
+export PGUSER='pgadmin'
+export PGPASSWORD='<mật khẩu admin>'
+export PGSSLMODE=require
+export INGESTION_DB_PASSWORD='<mật khẩu ingestion>'
+export LOGIC_DB_PASSWORD='<mật khẩu logic>'
+export API_DB_PASSWORD='<mật khẩu api>'
+export JOB_TRIGGER_TOKEN='<token job>'
+export CF_API_TOKEN='<token Cloudflare Radar>'
+export ACR_NAME="kpdlacr$SUF"
+export ACR_LOGIN="$ACR_NAME.azurecr.io"
+export ACR_PW='<password của registry, trong Access keys>'
+export DOMAIN='<Default domain của kpdl-env>'
+
+export INGESTION_WAREHOUSE_DSN="postgresql://ingestion_user:$INGESTION_DB_PASSWORD@$PGHOST:5432/warehouse?sslmode=require"
+export LOGIC_WAREHOUSE_DSN="postgresql://logic_user:$LOGIC_DB_PASSWORD@$PGHOST:5432/warehouse?sslmode=require"
+export LOGIC_MART_DSN="postgresql://logic_user:$LOGIC_DB_PASSWORD@$PGHOST:5432/mart?sslmode=require"
+export API_MART_DSN="postgresql://api_user:$API_DB_PASSWORD@$PGHOST:5432/mart?sslmode=require"
+
+# rút gọn lệnh docker compose cho file của VM
+dc() { docker compose -f ~/KPDL-NHOM-6/deploy/azure/vm-compose.yml --project-directory ~/KPDL-NHOM-6 "$@"; }
 ```
 
-Chờ backfill 365 ngày (khoảng 5 phút nếu token hợp lệ), kiểm tra bằng `psql` từ máy bạn:
+Rồi khóa file và nạp vào phiên làm việc:
+
+```bash
+chmod 600 ~/kpdl.env
+source ~/kpdl.env
+```
+
+**Mỗi lần SSH vào VM, việc đầu tiên là `cd ~/KPDL-NHOM-6 && source ~/kpdl.env`.** Bước nào báo "biến chưa đặt" thường là do quên lệnh này. File này chứa mật khẩu: không gửi cho ai, không commit.
+
+## 9. [VM] Khởi tạo database
+
+Từ thư mục `~/KPDL-NHOM-6`:
+
+```bash
+bash deploy/azure/init-managed-db.sh
+```
+
+Script tạo database `warehouse` và `mart`, các bảng, ba user ứng dụng và quyền (`ingestion_user` ghi Bronze/Silver, `logic_user` đọc Silver và ghi Gold, `api_user` chỉ đọc Gold). Chạy lại nhiều lần vẫn an toàn. Cuối cùng in `Xong: warehouse và mart trên ...`.
+
+Kiểm tra:
+
+```bash
+psql "$LOGIC_MART_DSN" -c '\dt gold.*'
+```
+
+Phải thấy danh sách bảng gold. Nếu lỗi:
+
+- `connection timed out`: chưa tick "Allow public access from any Azure service" ở server PostgreSQL (Portal → server → **Networking**).
+- `password authentication failed`: sai `PGPASSWORD` hoặc sai mật khẩu trong file `kpdl.env`.
+
+## 10. [VM] Chạy ingestion trước (để có dữ liệu)
+
+Ingestion backfill dữ liệu lịch sử mất một lúc, và huấn luyện mô hình cần ít nhất 30 ngày Silver, nên **làm bước này sớm nhất** rồi để nó chạy.
+
+```bash
+docker build -f services/ingestion/Dockerfile -t $ACR_LOGIN/kpdl-ingestion:v1 .
+dc up -d ingestion
+dc logs --tail 30 ingestion
+```
+
+Log phải có dòng chạy chu kỳ ingestion và không báo lỗi. Nếu báo `CF_API_TOKEN chưa được cấu hình`: sửa token trong `~/kpdl.env`, `source ~/kpdl.env`, rồi `dc up -d --force-recreate ingestion`.
+
+Kiểm tra dữ liệu (chạy lại sau vài phút, số dòng phải tăng dần):
 
 ```bash
 psql "$LOGIC_WAREHOUSE_DSN" -c "SELECT metric, count(*), min(ts), max(ts) FROM silver.metrics_hourly GROUP BY 1"
 ```
 
-Cần Silver có ít nhất 30 ngày thì mới huấn luyện được. Huấn luyện một lần trên VM rồi lấy file mô hình về:
+Ingestion có `restart: unless-stopped` nên tự chạy lại khi VM khởi động lại.
+
+## 11. [VM] Build image rồi [Portal] tạo Container Apps
+
+### 11.1 Build và đẩy image lên registry
+
+Trong lúc ingestion chạy, build các image khác (giữ cửa sổ SSH mở; mỗi image vài phút):
 
 ```bash
-ssh azureuser@$VMIP 'cd ~/kpdl && docker compose --profile training run --rm trainer && ls -la models'
-scp azureuser@$VMIP:~/kpdl/models/'*.joblib' models/
-ls models
+echo "$ACR_PW" | docker login $ACR_LOGIN -u $ACR_NAME --password-stdin
+
+for s in analysis api; do
+  docker build -f services/$s/Dockerfile -t $ACR_LOGIN/kpdl-$s:v1 . && docker push $ACR_LOGIN/kpdl-$s:v1
+done
+
+docker build -f frontend/Dockerfile \
+  --build-arg NEXT_PUBLIC_API_URL=https://ca-api.$DOMAIN \
+  --build-arg NEXT_PUBLIC_DATA_MODE=api \
+  -t $ACR_LOGIN/kpdl-web:v1 frontend && docker push $ACR_LOGIN/kpdl-web:v1
+
+for s in clustering prediction; do
+  docker build -f services/$s/Dockerfile -t $ACR_LOGIN/kpdl-$s:v1 .
+done
+docker build -f training/Dockerfile --target trainer -t $ACR_LOGIN/kpdl-trainer:v1 .
 ```
 
-## 7. Tạo các Container Apps
+- Build `web` chạy luôn test đơn vị, lint và `next build`, mất vài phút. `NEXT_PUBLIC_API_URL` nhúng lúc build: nếu đổi `DOMAIN` hoặc tên `ca-api` thì phải build lại `web`.
+- Hai image `clustering` và `prediction` chỉ build tại VM, **chưa đẩy lên registry**: ở bước 11.4 ta đóng gói mô hình vào rồi mới đẩy.
 
-Hàm trợ giúp (đều dùng ingress ngoài để Functions và trình duyệt gọi được; `/run` luôn cần `X-Job-Token`):
+Lệnh in các giá trị cần dán vào Portal ở bước tiếp theo:
 
 ```bash
-ca() { # ca <tên app> <image> <cổng> <cpu> <memory> <min bản sao> [tham số khác của az containerapp create]
-  local name=$1 image=$2 port=$3 cpu=$4 mem=$5 min=$6; shift 6
-  az containerapp create -g $RG -n "$name" --environment $CAE --image "$ACR_LOGIN/$image" \
-    --registry-server $ACR_LOGIN --registry-username $ACR --registry-password "$ACR_PW" \
-    --target-port $port --ingress external --cpu $cpu --memory $mem \
-    --min-replicas $min --max-replicas 1 "$@"
-}
+echo "WAREHOUSE_DSN (logic): $LOGIC_WAREHOUSE_DSN"
+echo "MART_DSN (logic):      $LOGIC_MART_DSN"
+echo "MART_DSN (api):        $API_MART_DSN"
+echo "JOB_TRIGGER_TOKEN:     $JOB_TRIGGER_TOKEN"
+echo "DOMAIN:                $DOMAIN"
 ```
 
-Đóng gói mô hình vào image clustering và prediction (context là thư mục `models` chỉ chứa file `.joblib`):
+### 11.2 [Portal] Cách tạo một Container App (áp dụng cho mọi app)
+
+**Create a resource → Container App → Create.**
+
+- **Basics**: Resource group `kpdl-rg`; Container app name theo bảng; Region cùng region; **Container Apps Environment = `kpdl-env`**.
+- **Container**: bỏ tick **Use quickstart image**. Image source **Azure Container Registry**; Registry `kpdlacrSUF` (nếu hỏi cách xác thực, chọn admin credentials / Secrets); Image và Image tag theo bảng; CPU and Memory theo bảng; thêm **Environment variables** theo bảng (kiểu **Manual entry**).
+- **Ingress**: **Enabled**, Ingress traffic **Accepting traffic from anywhere**, Ingress type HTTP, **Target port** theo bảng.
+- **Review + create → Create.**
+- Sau khi tạo: app → **Application → Scale** (Scale and replicas) → **Edit and deploy** → tab Scale: đặt **Min replicas** và **Max replicas** theo bảng → **Create**.
+
+Tên app phải **đúng như bảng** (địa chỉ có dạng `https://<tên app>.DOMAIN`, các app gọi nhau bằng địa chỉ này).
+
+### 11.3 [Portal] Ba app đầu: `ca-analysis`, `ca-api`, `ca-web`
+
+Chưa cần mô hình, tạo ngay:
+
+| App | Image : tag | Port | CPU / RAM | Min / Max replicas |
+| :--- | :--- | :--- | :--- | :--- |
+| `ca-analysis` | `kpdl-analysis` : `v1` | 8001 | 0.5 / 1 Gi | 1 / 1 |
+| `ca-api` | `kpdl-api` : `v1` | 8000 | 0.25 / 0.5 Gi | 0 / 1 |
+| `ca-web` | `kpdl-web` : `v1` | 3000 | 0.25 / 0.5 Gi | 0 / 1 |
+
+**Biến môi trường `ca-analysis`** (`ca-prediction` và `ca-clustering` ở bước sau dùng đúng bộ này):
+
+| Tên biến | Giá trị |
+| :--- | :--- |
+| `WAREHOUSE_DSN` | DSN warehouse của `logic_user` (lệnh `echo` phía trên) |
+| `MART_DSN` | DSN mart của `logic_user` |
+| `JOB_TRIGGER_TOKEN` | token job |
+| `SCHEDULER_ENABLED` | `false` |
+| `TZ_LOCAL` | `Asia/Ho_Chi_Minh` |
+
+**Biến môi trường `ca-api`:**
+
+| Tên biến | Giá trị |
+| :--- | :--- |
+| `MART_DSN` | DSN mart của `api_user` |
+| `JOB_TRIGGER_TOKEN` | token job (**giống** `ca-analysis`) |
+| `ANALYSIS_URL` | `https://ca-analysis.DOMAIN` |
+| `CLUSTERING_URL` | `https://ca-clustering.DOMAIN` |
+| `PREDICTION_URL` | `https://ca-prediction.DOMAIN` |
+| `JOB_REQUEST_TIMEOUT_SECONDS` | `45` (dư cho lần khởi động lạnh của app) |
+| `CORS_ORIGINS` | `https://ca-web.DOMAIN` (không có dấu `/` ở cuối) |
+
+**Biến môi trường `ca-web`:** `HOSTNAME` = `0.0.0.0`, `PORT` = `3000`.
+
+(Thay `DOMAIN` bằng Default domain thật. Các DSN và token nhập thẳng vào ô giá trị cho đơn giản; chấp nhận được với đồ án ngắn hạn. Muốn kín hơn thì dùng mục **Secrets** của app rồi chọn *Reference a secret*.)
+
+### 11.4 [VM] Huấn luyện mô hình rồi đóng gói vào image
+
+Chỉ làm khi bước 10 đã cho kết quả ít nhất **30 ngày** Silver (cột `min(ts)` cách `max(ts)` từ 30 ngày trở lên). Chưa đủ thì chờ backfill chạy tiếp, trainer sẽ từ chối huấn luyện.
+
+```bash
+dc --profile training run --rm trainer
+ls -la models
+```
+
+Phải thấy các file `.joblib` (ví dụ `rf_regressor.joblib`, `rf_classifier.joblib`) và `metrics.json`. Rồi đóng gói vào hai image và đẩy lên registry:
 
 ```bash
 for s in clustering prediction; do
-  docker build --platform linux/amd64 -f deploy/azure/Dockerfile.models \
-    --build-arg BASE=$ACR_LOGIN/kpdl-$s:v1 -t $ACR_LOGIN/kpdl-$s:v1-models models \
-    && docker push $ACR_LOGIN/kpdl-$s:v1-models
+  docker build -f deploy/azure/Dockerfile.models --build-arg BASE=$ACR_LOGIN/kpdl-$s:v1 \
+    -t $ACR_LOGIN/kpdl-$s:v1-models models && docker push $ACR_LOGIN/kpdl-$s:v1-models
 done
 ```
 
-Tạo năm app. `ca-analysis` và `ca-prediction` luôn bật 1 bản sao (job chạy nền sau khi trả 202, không nên bị scale về 0 giữa chừng); `ca-clustering`, `ca-api`, `ca-web` được phép về 0:
+### 11.5 [Portal] Hai app còn lại: `ca-prediction`, `ca-clustering`
+
+Tạo như 11.2, **dùng tag `v1-models`**:
+
+| App | Image : tag | Port | CPU / RAM | Min / Max replicas |
+| :--- | :--- | :--- | :--- | :--- |
+| `ca-prediction` | `kpdl-prediction` : `v1-models` | 8003 | 0.5 / 1 Gi | 1 / 1 |
+| `ca-clustering` | `kpdl-clustering` : `v1-models` | 8002 | 0.5 / 1 Gi | 0 / 1 |
+
+Biến môi trường: giống `ca-analysis` (5 biến ở 11.3).
+
+`ca-analysis` và `ca-prediction` luôn bật 1 bản sao vì job chạy nền sau khi trả 202, không nên bị tắt giữa chừng. Nếu `ca-clustering` báo job bị gián đoạn thì đặt Min replicas = 1.
+
+## 12. [Portal + Cloud Shell] Azure Function (bộ hẹn giờ)
+
+### 12.1 [Portal] Tạo Function App
+
+**Create a resource → Function App → Create.** Chọn hosting plan **Flex Consumption** (hoặc **Consumption** nếu có).
+
+| Ô | Giá trị |
+| :--- | :--- |
+| Resource group | `kpdl-rg` |
+| Function App name | `kpdl-func-SUF` |
+| Region | cùng region |
+| Runtime stack | Python, version 3.11 |
+| Storage account | tạo mới, tên `kpdlstgSUF` |
+| Application Insights | giữ **Yes** (không có thì tab Monitor không hiện lượt chạy) |
+
+### 12.2 [Portal] Thêm biến môi trường cho Function
+
+Function App → **Settings → Environment variables** (hoặc Configuration) → **App settings** → thêm 4 biến, rồi **Apply** và **Confirm**:
+
+| Tên | Giá trị |
+| :--- | :--- |
+| `ANALYSIS_URL` | `https://ca-analysis.DOMAIN` |
+| `PREDICTION_URL` | `https://ca-prediction.DOMAIN` |
+| `CLUSTERING_URL` | `https://ca-clustering.DOMAIN` |
+| `JOB_TRIGGER_TOKEN` | token job (**giống** các app) |
+
+### 12.3 [Cloud Shell] Đưa mã Function lên
+
+Mở **Cloud Shell** (biểu tượng `>_` trên thanh trên cùng của Portal), chọn **Bash**. Nếu hỏi về storage thì chọn không cần storage account (hoặc tạo mới, rất rẻ). Rồi chạy:
 
 ```bash
-JOB_ENV="JOB_TRIGGER_TOKEN=secretref:job-token SCHEDULER_ENABLED=false TZ_LOCAL=Asia/Ho_Chi_Minh"
-LOGIC_SECRETS=(warehouse-dsn="$LOGIC_WAREHOUSE_DSN" mart-dsn="$LOGIC_MART_DSN" job-token="$JOB_TRIGGER_TOKEN")
-LOGIC_ENV="WAREHOUSE_DSN=secretref:warehouse-dsn MART_DSN=secretref:mart-dsn $JOB_ENV"
-
-ca ca-analysis   kpdl-analysis:v1          8001 0.5 1Gi 1 --secrets "${LOGIC_SECRETS[@]}" --env-vars $LOGIC_ENV
-ca ca-prediction kpdl-prediction:v1-models 8003 0.5 1Gi 1 --secrets "${LOGIC_SECRETS[@]}" --env-vars $LOGIC_ENV
-ca ca-clustering kpdl-clustering:v1-models 8002 0.5 1Gi 0 --secrets "${LOGIC_SECRETS[@]}" --env-vars $LOGIC_ENV
-
-ca ca-api kpdl-api:v1 8000 0.25 0.5Gi 0 \
-  --secrets mart-dsn="$API_MART_DSN" job-token="$JOB_TRIGGER_TOKEN" \
-  --env-vars MART_DSN=secretref:mart-dsn JOB_TRIGGER_TOKEN=secretref:job-token \
-    ANALYSIS_URL=http://ca-analysis CLUSTERING_URL=http://ca-clustering PREDICTION_URL=http://ca-prediction \
-    JOB_REQUEST_TIMEOUT_SECONDS=45 CORS_ORIGINS=$WEB_URL
-
-ca ca-web kpdl-web:v1 3000 0.25 0.5Gi 0 --env-vars HOSTNAME=0.0.0.0 PORT=3000
+git clone -b feat/docker-azure-deploy https://github.com/hieupt-ht/KPDL-NHOM-6.git
+cd KPDL-NHOM-6/deploy/azure/function
+python3 -m zipfile -c ../function.zip function_app.py jobs.py host.json requirements.txt
+az functionapp deploy -g kpdl-rg -n kpdl-func-<SUF> --src-path ../function.zip --type zip
 ```
 
-`ANALYSIS_URL=http://ca-analysis` là địa chỉ nội bộ trong cùng môi trường; `JOB_REQUEST_TIMEOUT_SECONDS=45` dư cho lần khởi động lạnh của app đã scale về 0. `CORS_ORIGINS` phải đúng bằng `$WEB_URL` (không có dấu `/` ở cuối).
+Thay `<SUF>` bằng hậu tố của bạn. Lệnh dùng được cho cả Flex Consumption lẫn Consumption. Nếu không chạy, cách khác không cần lệnh: cài VS Code + extension **Azure Functions**, mở thư mục `deploy/azure/function`, bấm `F1` → **Azure Functions: Deploy to Function App** → chọn `kpdl-func-SUF`.
 
-## 8. Azure Functions (bộ hẹn giờ)
+Lịch (giờ UTC, trong `function_app.py`): `analysis` và `prediction` mỗi 5 phút (`0 */5 * * * *`); `clustering` lúc 17:30 UTC = 00:30 giờ Việt Nam (`0 30 17 * * *`). Ingestion không nằm ở đây vì đã tự chạy 5 phút trên VM.
 
-```bash
-az storage account create -g $RG -n $STG -l $LOC --sku Standard_LRS
-az functionapp create -g $RG -n $FUNC --storage-account $STG \
-  --consumption-plan-location $LOC --os-type Linux \
-  --runtime python --runtime-version 3.11 --functions-version 4
-az functionapp config appsettings set -g $RG -n $FUNC --settings \
-  ANALYSIS_URL=https://ca-analysis.$DOMAIN \
-  CLUSTERING_URL=https://ca-clustering.$DOMAIN \
-  PREDICTION_URL=https://ca-prediction.$DOMAIN \
-  JOB_TRIGGER_TOKEN=$JOB_TRIGGER_TOKEN
-```
+## 13. Kiểm tra
 
-Nếu `functionapp create` báo gói Consumption Linux không khả dụng, dùng Flex Consumption: thay `--consumption-plan-location $LOC --os-type Linux` bằng `--flexconsumption-location $LOC`.
+Thay `DOMAIN` bằng Default domain thật:
 
-Triển khai mã (3 hàm timer trong `deploy/azure/function/`):
+1. Mở `https://ca-api.DOMAIN/health` trên trình duyệt: phải hiện `{"status":"ok","service":"api"}`. `https://ca-api.DOMAIN/ready` kiểm tra kết nối database (lần đầu có thể chậm vài giây vì app khởi động lạnh).
+2. Mở `https://ca-web.DOMAIN`, bật **F12 → Network**: thấy các request `/api/...` đi tới `ca-api`. Gold ban đầu trống nên API trả 404, đây là thiết kế chứ không phải lỗi.
+3. Vào `https://ca-web.DOMAIN/admin`, bấm **Chạy lại** cho analysis, prediction, clustering và chờ trạng thái cuối.
+4. Portal → Function App → **Functions** → từng hàm → **Monitor / Invocations**: thấy lượt chạy mỗi 5 phút, kết quả "đã nhận lệnh chạy" (hoặc "đang có job chạy, bỏ qua" khi trùng).
+5. Tải lại web: đủ biểu đồ, dự báo ngày mai và nhãn rủi ro.
 
-```bash
-(cd deploy/azure/function && python3 -m zipfile -c ../function.zip function_app.py jobs.py host.json requirements.txt)
-az functionapp deployment source config-zip -g $RG -n $FUNC \
-  --src deploy/azure/function.zip --build-remote true
-rm deploy/azure/function.zip
-```
+Chụp màn hình các bước này và Portal đang hiện bốn loại dịch vụ để đưa vào báo cáo. Phần demo "xóa hết container, `docker compose up`" vẫn làm trên máy local theo README mục 12; bản Azure chứng minh điểm cộng "deploy cloud".
 
-Lịch (UTC): `analysis` và `prediction` mỗi 5 phút (`0 */5 * * * *`), `clustering` lúc 17:30 UTC tức 00:30 giờ Việt Nam (`0 30 17 * * *`). Ingestion không nằm ở đây vì đã tự chạy 5 phút trên VM.
+## 14. Chi phí: tắt, bật lại, xóa
 
-## 9. Kiểm tra
+**Khi chưa cần dùng** (giữ nguyên dữ liệu và cấu hình), trên Portal:
 
-```bash
-curl -s $API_URL/health ; echo
-curl -s $API_URL/ready  ; echo
-curl -s -o /dev/null -w '%{http_code}\n' -X POST https://ca-analysis.$DOMAIN/run    # phải là 401 (thiếu token)
-echo $WEB_URL
-```
+- **VM** → **Stop** (loại *deallocate*, để ngừng tính tiền máy). Ingestion dừng theo; dừng quá ~36 giờ thì khi bật lại nó tự bù phần thiếu (tối đa 28 ngày).
+- **PostgreSQL server** → **Stop** (Azure tự bật lại sau tối đa 7 ngày).
+- **Function App** → **Stop**.
+- Mỗi **Container App** → Scale → Min replicas = 0.
 
-1. Mở `$WEB_URL`, bật **F12 → Network**: các request `/api/...` đi tới `ca-api`, trả JSON (lần đầu có thể chậm vài giây vì app khởi động lạnh).
-2. Gold ban đầu trống nên API trả 404 (đúng thiết kế). Vào `$WEB_URL/admin`, bấm **Chạy lại** cho analysis, prediction, clustering và chờ trạng thái cuối.
-3. Portal → Function App → **Functions** → từng hàm → **Invocations**: thấy lượt chạy mỗi 5 phút, kết quả "đã nhận lệnh chạy" (hoặc "đang có job chạy, bỏ qua" khi trùng).
-4. Tải lại web: đủ biểu đồ, dự báo ngày mai và nhãn rủi ro.
+**Trước buổi chấm**, bật lại theo thứ tự: PostgreSQL → VM → Container Apps (đặt lại Min = 1 cho `ca-analysis`, `ca-prediction`, và nên cả `ca-api`, `ca-web` để khỏi chờ khởi động lạnh) → Function App.
 
-Demo trước thầy: phần "xóa hết container, `docker compose up`" vẫn làm trên máy local theo README mục 12; bản Azure dùng để chứng minh điểm cộng "deploy cloud" (mở URL, F12 xem API, mở Portal thấy bốn dịch vụ).
+**Xong đồ án:** **Resource groups → `kpdl-rg` → Delete resource group** (gõ tên group để xác nhận). Việc này xóa sạch mọi thứ và ngừng tính tiền.
 
-## 10. Giữ chi phí thấp
+## 15. Cập nhật phiên bản
 
-Khi chưa cần dùng (giữ nguyên dữ liệu và cấu hình):
+SSH vào VM, `cd ~/KPDL-NHOM-6 && source ~/kpdl.env`, `git pull`, build lại image với tag mới (ví dụ `v2`) rồi đẩy lên registry. Trên Portal, vào app → **Application → Containers → Edit and deploy**, đổi tag của image rồi Create. Huấn luyện lại mô hình: lặp lại bước 11.4, đẩy `:v2-models`, đổi tag cho `ca-prediction` và `ca-clustering`. Ingestion trên VM: `docker build ... -t $ACR_LOGIN/kpdl-ingestion:v1 .` rồi `dc up -d --force-recreate ingestion`.
 
-```bash
-az functionapp stop -g $RG -n $FUNC
-for a in ca-analysis ca-prediction ca-clustering ca-api ca-web; do
-  az containerapp update -g $RG -n $a --min-replicas 0; done
-az vm deallocate -g $RG -n $VM
-az postgres flexible-server stop -g $RG -n $PG          # tự khởi động lại sau tối đa 7 ngày
-```
-
-Trước buổi chấm (bật lại theo thứ tự PostgreSQL → VM → app → Function):
-
-```bash
-az postgres flexible-server start -g $RG -n $PG
-az vm start -g $RG -n $VM
-for a in ca-analysis ca-prediction ca-api ca-web; do
-  az containerapp update -g $RG -n $a --min-replicas 1; done
-az functionapp start -g $RG -n $FUNC
-```
-
-Ingestion trên VM tự lên lại (`restart: unless-stopped`) và lấp khoảng trống dữ liệu; đừng để nó ngừng quá khoảng 28 ngày, vì khi đó phải nạp bù thủ công (xem `services/ingestion/README.md`). Xong dự án, xóa tất cả:
-
-```bash
-az group delete -g $RG --yes --no-wait
-```
-
-## 11. Cập nhật phiên bản
-
-Build lại image với tag mới rồi cập nhật app, ví dụ API:
-
-```bash
-docker build --platform linux/amd64 -f services/api/Dockerfile -t $ACR_LOGIN/kpdl-api:v2 . && docker push $ACR_LOGIN/kpdl-api:v2
-az containerapp update -g $RG -n ca-api --image $ACR_LOGIN/kpdl-api:v2
-```
-
-Huấn luyện lại mô hình: lặp lại bước huấn luyện ở mục 6, build lại hai image `:v2-models` và `update --image` cho `ca-prediction`, `ca-clustering`.
-
-## 12. Xử lý sự cố
+## 16. Xử lý sự cố
 
 | Triệu chứng | Cách xử lý |
 | :--- | :--- |
-| `RequestDisallowedByPolicy`, "location not available", size bị chặn | Subscription sinh viên giới hạn region/size. Đổi `LOC` (và làm lại từ mục 3), hoặc chọn size khác; PostgreSQL Flexible hay bị chặn theo region |
-| Web báo lỗi mạng/CORS khi gọi API | `CORS_ORIGINS` của `ca-api` phải đúng `$WEB_URL`: `az containerapp update -g $RG -n ca-api --set-env-vars CORS_ORIGINS=$WEB_URL` |
-| Web gọi sai địa chỉ API | `NEXT_PUBLIC_API_URL` nhúng lúc build; build lại `web` với `API_URL` đúng, rồi `update --image` |
-| API trả 503 | Không kết nối được DB: kiểm tra DSN có `sslmode=require`, quy tắc firewall "Azure services", log `az containerapp logs show -g $RG -n ca-api --tail 50` |
-| Job `failed`: "Chưa có mô hình" | App chưa dùng image `:v1-models`: `az containerapp update -g $RG -n ca-prediction --image $ACR_LOGIN/kpdl-prediction:v1-models` |
-| Function báo HTTP 401 | `JOB_TRIGGER_TOKEN` của Function khác của app; đặt lại đồng bộ ở cả hai nơi |
-| Function báo timeout | App đang khởi động lạnh quá lâu; để `--min-replicas 1` cho app đó. Không tự thử lại, vì yêu cầu có thể đã được nhận |
-| App bị `OOMKilled` | Tăng tài nguyên: `az containerapp update -g $RG -n <app> --cpu 1 --memory 2Gi` |
-| Ingestion không có dữ liệu | `ssh azureuser@$VMIP 'cd ~/kpdl && docker compose logs --tail 50 ingestion'`, kiểm tra `CF_API_TOKEN` |
-| Trainer dừng vì Silver ít hơn 30 ngày | Chờ backfill xong rồi chạy lại |
-| `docker push` bị từ chối | Chạy lại `docker login` với `ACR_PW`; mật khẩu admin của ACR đổi được ở Portal |
+| `RequestDisallowedByPolicy`, "location not available", size bị chặn | Tài khoản sinh viên giới hạn region/size. Chọn region khác (và dùng cho **mọi** dịch vụ, làm lại từ đầu mục đó) hoặc size VM khác |
+| Ô **Burstable** của PostgreSQL bị mờ | Đổi **Storage type** sang **Premium SSD** (không phải v2), rồi chọn lại Burstable |
+| Lệnh báo biến rỗng hoặc "chưa đặt" | Quên `cd ~/KPDL-NHOM-6 && source ~/kpdl.env` ở phiên SSH mới |
+| `permission denied ... docker.sock` | Chưa đăng nhập lại sau `usermod`: gõ `exit` rồi SSH lại |
+| `docker push` bị từ chối | Chạy lại `echo "$ACR_PW" \| docker login $ACR_LOGIN -u $ACR_NAME --password-stdin`. Chưa bật Admin user của registry thì bật ở Access keys |
+| Build `web` bị kill hoặc hết bộ nhớ | VM thiếu RAM: kiểm tra `free -h` có swap 2G, hoặc đổi VM sang size ≥ 4 GiB |
+| Web báo lỗi mạng/CORS khi gọi API | `CORS_ORIGINS` của `ca-api` phải đúng `https://ca-web.DOMAIN` (không có `/` ở cuối). Sửa ở app → **Environment variables** |
+| Web gọi sai địa chỉ API | `NEXT_PUBLIC_API_URL` nhúng lúc build: build lại `web` với `DOMAIN` đúng, đẩy lên rồi đổi image của `ca-web` |
+| API trả 503 | Không kết nối được database: kiểm tra DSN có `sslmode=require`, quy tắc "Azure services" ở PostgreSQL → Networking, xem log của app (app → **Monitoring → Log stream**) |
+| Job `failed`: "Chưa có mô hình" | `ca-prediction` hoặc `ca-clustering` chưa dùng image tag `v1-models` |
+| Function báo HTTP 401 | `JOB_TRIGGER_TOKEN` của Function khác của app; đặt lại cho đồng nhất ở mọi nơi |
+| Function báo timeout | App đang khởi động lạnh quá lâu: đặt Min replicas = 1 cho app đó. Không tự thử lại vì yêu cầu có thể đã được nhận |
+| App bị `OOMKilled` | Tăng CPU/RAM của app ở **Containers → Edit and deploy** |
+| Ingestion không có dữ liệu | `dc logs --tail 50 ingestion`; kiểm tra `CF_API_TOKEN` |
+| Trainer dừng vì Silver ít hơn 30 ngày | Chờ backfill chạy xong rồi chạy lại 11.4 |
 
-## 13. Lưu ý bảo mật
+## 17. Lưu ý bảo mật
 
-- Dashboard và Jobs API **không có đăng nhập** theo yêu cầu chủ dự án; ai biết URL đều bấm được **Chạy lại**. Chỉ chia sẻ URL cho người cần xem và thu nhỏ/tắt tài nguyên khi không dùng. Không khôi phục cơ chế đăng nhập nếu nhóm chưa quyết định.
-- `JOB_TRIGGER_TOKEN` chỉ bảo vệ đường `/run`, đặt ngẫu nhiên và giống nhau ở API, ba service, Function và ingestion trên VM. Không đưa token, DSN hay mật khẩu vào git.
-- PostgreSQL có endpoint công khai (quy tắc "Azure services"), nên mật khẩu phải mạnh và kết nối luôn dùng TLS. Muốn chặt hơn cần VNet/Private Endpoint (tốn thêm tiền).
-- Mật khẩu admin ACR và mật khẩu DB nằm trong `~/kpdl-azure.env`: giữ file này ngoài repo.
-
-Phương án một VM chạy toàn bộ Docker Compose (rẻ hơn, không dùng Functions/Container Apps/PostgreSQL managed) vẫn còn trong lịch sử git của nhánh này, commit `ae04736`, phòng khi subscription chặn một trong các dịch vụ trên.
+- `~/kpdl.env` (trên VM) chứa mật khẩu và token: không gửi cho ai, không commit, và xóa khi xong đồ án.
+- Mật khẩu admin PostgreSQL chỉ dùng cho bước khởi tạo (bước 9); các service chạy bằng ba user ứng dụng có quyền hẹp.
+- PostgreSQL mở cho "mọi dịch vụ Azure" và VM mở cổng SSH ra internet (chỉ cho đăng nhập bằng khóa): chỉ phù hợp đồ án ngắn hạn. Xóa resource group khi xong.
+- Đừng dán `CF_API_TOKEN`, DSN hoặc `JOB_TRIGGER_TOKEN` vào chat, issue hoặc PR.
