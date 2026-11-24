@@ -4,8 +4,8 @@ set -eu
 : "${LOGIC_DB_PASSWORD:?missing LOGIC_DB_PASSWORD}"
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
   -v dbname="$POSTGRES_DB" -v ingestion_password="$INGESTION_DB_PASSWORD" -v logic_password="$LOGIC_DB_PASSWORD" <<'SQL'
-SELECT format('CREATE ROLE ingestion_user LOGIN PASSWORD %L', :'ingestion_password') \gexec
-SELECT format('CREATE ROLE logic_user LOGIN PASSWORD %L', :'logic_password') \gexec
+SELECT format('CREATE ROLE ingestion_user LOGIN PASSWORD %L', :'ingestion_password') WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ingestion_user') \gexec
+SELECT format('CREATE ROLE logic_user LOGIN PASSWORD %L', :'logic_password') WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'logic_user') \gexec
 GRANT CONNECT ON DATABASE :"dbname" TO ingestion_user, logic_user;
 GRANT USAGE ON SCHEMA bronze, silver TO ingestion_user;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA bronze, silver TO ingestion_user;
