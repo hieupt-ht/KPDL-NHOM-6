@@ -1,4 +1,12 @@
-# Kiểm chứng tích hợp ML — 21/11/2026
+# Kiểm chứng tích hợp ML
+
+## Đồng bộ develop — 24/11/2026
+
+Đồng bộ develop 2a6acd6 (PR #30 bỏ đăng nhập và PR #31 Analysis). Dashboard/API truy cập trực tiếp; Compose ứng dụng có 8 dịch vụ, JOB_TRIGGER_TOKEN vẫn bắt buộc cho /run nội bộ. E2E ML không dùng Keycloak, vẫn kiểm tra Gold, một journal/lượt, upsert, rollback hai forecast và skipped khi Silver rỗng trong DB test riêng. Các số liệu mô hình dưới đây là checkpoint 21/11, chưa phải nghiệm thu bộ dữ liệu nhiều năm ở #32.
+
+Giữ PR #23 Draft: chưa thay cấu hình, artifact hoặc ghi Gold ứng dụng. Nhóm cần chốt nhãn rolling/k và phạm vi báo cáo; không coi đề xuất giữ đặc trưng tuyệt đối ở #32 là quyết định đã thống nhất.
+
+## Checkpoint 21/11/2026
 
 Nhánh tích hợp lấy `develop` a329820, ban đầu PR #22 đến 6fed9f4, sau đó đồng bộ `feature/machine-learning` 50c408e (đã merge PR #20–#28) theo [Issue #29](https://github.com/hieupt-ht/KPDL-NHOM-6/issues/29). PR tích hợp vào `develop` cần review của chủ phần ML. Không đổi schema Gold hay API JSON.
 
@@ -19,7 +27,7 @@ docker compose --profile training build trainer
 docker compose --profile training run --rm trainer --out-dir /app/models/validation
 ```
 
-API E2E dùng Silver tổng hợp trong DB `test_warehouse` và mô hình demo trong volume test riêng, không dùng token Cloudflare hay dữ liệu/volume ứng dụng. Kiểm tra Admin/Viewer, 202 và poll đúng run_id, một journal mỗi lần, upsert chạy lặp, đọc JSON Gold, rollback dự báo và giữ kết quả cũ khi thiếu dữ liệu. Đây là kiểm chứng luồng tích hợp, không chứng minh chất lượng mô hình thật.
+API E2E dùng Silver tổng hợp trong DB `test_warehouse` và mô hình demo trong volume test riêng, không dùng token Cloudflare hay dữ liệu/volume ứng dụng. Kiểm tra API không đăng nhập, 202 và poll đúng run_id, một journal mỗi lần, upsert chạy lặp, đọc JSON Gold, rollback dự báo và giữ kết quả cũ khi thiếu dữ liệu. Đây là kiểm chứng luồng tích hợp, không chứng minh chất lượng mô hình thật.
 
 ## Lần đầu: mô hình trước các cải tiến #24–#28
 

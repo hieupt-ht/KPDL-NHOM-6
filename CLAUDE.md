@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Truy cập ứng dụng — cập nhật 22/11/2026
+
+Đã gỡ đăng nhập, Keycloak, NextAuth và phân quyền Viewer/Admin theo yêu cầu chủ dự án. Mở / vào Tổng quan; /admin và API truy cập trực tiếp. Compose có 8 service. DATA_MODE mặc định api, demo chỉ bật khi yêu cầu rõ. JOB_TRIGGER_TOKEN vẫn bắt buộc giữa API và /run nội bộ, không truyền ra browser. Không khôi phục gate đăng nhập theo tài liệu lịch sử. Xem docs/frontend-live-integration.md và docs/api-contract.md.
+
 ## Project
 
 Monorepo for a Vietnamese network-anomaly monitoring system (university data-mining project). It ingests Cloudflare Radar time series for `location=VN`, runs analysis/clustering/prediction, and shows the results on a dashboard. `README.md` is the full design spec (in Vietnamese). `CONTRIBUTING.md` has the team workflow. Code comments, docs and commit messages are in Vietnamese or English, so match the surrounding file.
@@ -12,7 +16,7 @@ The whole stack runs in Docker. There is no local Python or Node setup, and test
 
 ```bash
 cp .env.example .env              # then fill in CF_API_TOKEN etc.
-make up                           # docker compose up -d --build (9 containers)
+make up                           # docker compose up -d --build (8 containers)
 make down                         # keep volumes; `down -v` forces a re-init of DB schemas and a full re-backfill
 make logs | make ps
 make psql-warehouse | make psql-mart
@@ -24,9 +28,8 @@ bash services/ingestion/tests/run.sh services/ingestion/tests/test_rescale.py -k
 INTEGRATION=1 bash services/ingestion/tests/run.sh   # also runs DB tests against the running warehouse-db (needs .env)
 
 # API tests: Docker only, private test databases/network, no project .env required
-bash services/api/tests/run.sh unit          # JWT/query/proxy unit tests
 bash services/api/tests/run.sh integration   # also PostgreSQL/runner tests
-bash services/api/tests/run.sh all           # also real Keycloak + API/service containers
+bash services/api/tests/run.sh all           # also real API/service containers
 # Windows PowerShell equivalents:
 ./services/api/tests/run.ps1 -Mode Unit
 ./services/api/tests/run.ps1 -Mode Integration
@@ -55,7 +58,6 @@ Medallion data flow across two separate PostgreSQL instances:
 Cloudflare Radar -> ingestion -> warehouse-db (bronze raw JSON -> silver.metrics_hourly)
                                       | read Silver
               analysis / clustering / prediction  -> mart-db (gold.*) -> api (read-only) -> frontend
-                                      keycloak (OIDC) <- api verifies JWT, frontend logs in via Auth.js
 ```
 
 Rules that span several files:
@@ -82,14 +84,12 @@ Every Python service has the same shape:
 
 Changing `backend/common/` affects every Python service.
 
-For Analysis/Clustering/Prediction, `common.runner` owns `gold.service_runs`; tasks must not write duplicate run logs. Manual Run and scheduler share a local lock plus a PostgreSQL advisory lock per service. A 202 is acceptance, not successful computation: poll the returned ID at `/api/jobs/runs/{run_id}` (admin). `/api/status` only returns the latest run per service. Ingestion retains its own Warehouse run log and backfill lock. `JOB_TRIGGER_TOKEN` protects the internal endpoints and must match API/logic services when auth is enabled.
+For Analysis/Clustering/Prediction, `common.runner` owns `gold.service_runs`; tasks must not write duplicate run logs. Manual Run and scheduler share a local lock plus a PostgreSQL advisory lock per service. A 202 is acceptance, not successful computation: poll the returned ID at `/api/jobs/runs/{run_id}`. `/api/status` only returns the latest run per service. Ingestion retains its own Warehouse run log and backfill lock. `JOB_TRIGGER_TOKEN` protects the internal endpoints and must always match API/logic services.
 
 ### Implementation status
 
-- **Implemented in this backend branch:** Gold read APIs, response validation/pagination, `/api/me`, Keycloak JWT/JWKS and Viewer/Admin, admin Jobs API and the shared execution/journal/lock mechanism. See `docs/api-contract.md` and `docs/backend-auth-jobs.md`.
 - **Implemented:** `ingestion`, with its tests.
 - Analysis/ML tasks and training in the active checkout must be inspected before assuming they exist. Separate feature branches may be ahead of develop. Do not merge their code just to make backend tests pass. Current unimplemented tasks report a failed run rather than fabricated success.
-- Frontend has separate demo and live API modes. Live mode uses NextAuth/Keycloak, backend-validated roles, refresh and exact run tracking. It requires `AUTH_ENABLED=true`. See `docs/frontend-live-integration.md`; algorithm/data acceptance remains separate.
 - Check the code before assuming a README feature exists.
 - ML contract review: see `docs/ml-contract-review.md` for issue #13/PR #12. Cluster feature JSON can contain numeric/null measurements plus the `metric` metadata string; forecast probability means P(High), including Low labels. Do not silently change the API's Vietnam-tomorrow default to match stale or UTC ML targets.
 
@@ -106,15 +106,7 @@ Read `services/ingestion/README.md` before changing it. The non-obvious parts:
 
 ### Frontend (`frontend/`)
 
-Next.js 16 App Router, React 19, Tailwind 4, ECharts via `echarts-for-react`, SWR and next-auth 4 with a Keycloak provider. API calls go through `lib/api.ts`, and response types are in `types/api.ts`. Demo mode is the default. For live sessions use `NEXT_PUBLIC_DATA_MODE=api` plus `AUTH_ENABLED=true`, then rebuild frontend: public variables are embedded at build time. Docker frontend builds run the Node unit tests and ESLint before Next.js build.
 
-`AUTH_ENABLED=false` grants the development identity viewer/admin permissions; it must not be used to accept authentication. In API mode, Auth.js must provide the access token, handle refresh and forward Authorization from browser requests. Gold histogram/seasonal/correlation snapshots and current status reject start/end with 422; do not send dashboard date filters to these endpoints. DB nullable/non-finite measurements are returned as null, never fabricated zeroes.
-
-### Auth gotcha
-
-The browser reaches Keycloak at `localhost:8080`, but the API container reaches it at `keycloak:8080`. `KC_HOSTNAME` and `KEYCLOAK_ISSUER` must match so the token `iss` claim validates. A mismatch shows up as 401s from the API.
-
-JWT verifies RS256, public issuer, audience `cyber-radar-api`, time claims and access-token type. `KEYCLOAK_JWKS_URL` is a separate internal URL in Docker; changing its connection destination must not change or disable issuer/audience checks. The Docker E2E test transport maps the public issuer to an internal connection while preserving Host/cookie origin and token validation.
 
 ## Workflow conventions (CONTRIBUTING.md and issue #2)
 

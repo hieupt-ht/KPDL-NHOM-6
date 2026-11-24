@@ -64,6 +64,62 @@ def compute_pearson_r(x: np.ndarray, y: np.ndarray) -> float | None:
     return r
 
 
+def _pivot_metrics(
+    df: pd.DataFrame,
+    variables: tuple[str, ...] = CORRELATION_VARS,
+) -> pd.DataFrame | None:
+    """Pivot dữ liệu theo timestamp, chỉ giữ các metric cần tính và giá trị hữu hạn.
+
+    Trả về None nếu không còn quan sát hợp lệ nào. Được dùng chung bởi
+    compute_correlation_records và correlation_feasible để đảm bảo cùng một
+    cách chuẩn bị dữ liệu.
+    """
+    if df.empty or "ts" not in df.columns or "metric" not in df.columns or "value" not in df.columns:
+        return None
+
+    sub_df = df[df["metric"].isin(variables)].copy()
+    valid_mask = sub_df["value"].notna() & ~np.isinf(sub_df["value"])
+    clean_df = sub_df[valid_mask]
+
+    if clean_df.empty:
+        return None
+
+    # Căn chỉnh dữ liệu theo timestamp (Pivot table)
+    # Nếu có timestamp trùng lặp cho cùng một metric, lấy trung bình
+    return clean_df.pivot_table(index="ts", columns="metric", values="value", aggfunc="mean")
+
+
+def correlation_feasible(
+    df: pd.DataFrame,
+    variables: tuple[str, ...] = CORRELATION_VARS,
+) -> bool:
+    """Kiểm tra có tồn tại ít nhất một cặp đủ điều kiện tính Pearson hay không.
+
+    Điều kiện giống hệt compute_correlation_records: >= MIN_OBSERVATIONS quan sát
+    ghép cặp hoàn chỉnh và phương sai > 0 (kể cả tự tương quan var_x == var_y).
+    Dùng cho Quality Gate.
+    """
+    pivoted = _pivot_metrics(df, variables)
+    if pivoted is None:
+        return False
+
+    for var_x in variables:
+        for var_y in variables:
+            if var_x not in pivoted.columns or var_y not in pivoted.columns:
+                continue
+            pair_df = pivoted[[var_x, var_y]].dropna()
+            if len(pair_df) < MIN_OBSERVATIONS:
+                continue
+            x_vals = pair_df[var_x].to_numpy(dtype=float)
+            y_vals = pair_df[var_y].to_numpy(dtype=float)
+            if var_x == var_y:
+                if np.var(x_vals) > 1e-12:
+                    return True
+            elif compute_pearson_r(x_vals, y_vals) is not None:
+                return True
+    return False
+
+
 def compute_correlation_records(
     df: pd.DataFrame,
     variables: tuple[str, ...] = CORRELATION_VARS,
@@ -77,20 +133,9 @@ def compute_correlation_records(
     - Không lưu NaN, Infinity hoặc tự tiện thay hệ số không xác định bằng 0.
     - Đảm bảo tính đối xứng và hệ số thuộc [-1, 1].
     """
-    if df.empty or "ts" not in df.columns or "metric" not in df.columns or "value" not in df.columns:
+    pivoted = _pivot_metrics(df, variables)
+    if pivoted is None:
         return []
-
-    # Lọc chỉ lấy các metric trong danh sách cần tính
-    sub_df = df[df["metric"].isin(variables)].copy()
-    valid_mask = sub_df["value"].notna() & ~np.isinf(sub_df["value"])
-    clean_df = sub_df[valid_mask]
-
-    if clean_df.empty:
-        return []
-
-    # Căn chỉnh dữ liệu theo timestamp (Pivot table)
-    # Nếu có timestamp trùng lặp cho cùng một metric, lấy trung bình
-    pivoted = clean_df.pivot_table(index="ts", columns="metric", values="value", aggfunc="mean")
 
     records: list[dict[str, Any]] = []
 

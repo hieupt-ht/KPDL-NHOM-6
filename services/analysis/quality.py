@@ -18,7 +18,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from correlation import correlation_feasible
 from reader import ALL_METRICS
+from temporal_patterns import MIN_TEMPORAL_PATTERN_OBSERVATIONS
+from trend import trend_series_feasible
 
 log = logging.getLogger(__name__)
 
@@ -51,7 +54,8 @@ class MetricQualitySummary:
     anomaly_samples: list[dict[str, Any]] = field(default_factory=list)
     is_sufficient: bool = False
     sufficient_for_resampling: bool = False
-    sufficient_for_seasonal: bool = False
+    sufficient_for_histogram: bool = False
+    sufficient_for_temporal_pattern: bool = False
     sufficient_for_trend: bool = False
 
 
@@ -280,10 +284,24 @@ def evaluate_data_quality(df: pd.DataFrame) -> QualityReport:
                     })
 
         summary.is_sufficient = summary.valid_records >= MIN_VALID_RECORDS_PER_METRIC
-        summary.sufficient_for_resampling = summary.valid_records >= 1
-        summary.sufficient_for_seasonal = summary.valid_records >= MIN_VALID_RECORDS_PER_METRIC
-        # Trend yêu cầu ít nhất 8 tuần (8 * 168 giờ) đối với dữ liệu theo giờ
-        summary.sufficient_for_trend = summary.valid_records >= (8 * 168)
+
+        # Điều kiện "đủ" cho từng thuật toán phải khớp với cách thuật toán đó
+        # thực sự đếm và lọc dữ liệu:
+        # - Các thuật toán chỉ loại NULL/NaN/Inf (không loại giá trị ngoài miền
+        #   như valid_records), nên đếm trên finite_df.
+        # - Temporal pattern dedup theo timestamp rồi đếm số quan sát -> đếm distinct ts.
+        # - Trend/Histo/Resample dùng trực tiếp các giá trị hữu hạn.
+        n_finite = len(finite_vals)
+        n_distinct_ts = int(finite_df["ts"].nunique()) if len(finite_df) else 0
+
+        summary.sufficient_for_resampling = n_finite >= 1
+        summary.sufficient_for_histogram = n_finite >= 1
+        summary.sufficient_for_temporal_pattern = (
+            n_distinct_ts >= MIN_TEMPORAL_PATTERN_OBSERVATIONS
+        )
+        # Trend: dùng đúng logic _prepare_regular_series của trend.py
+        # (bucket đầy đủ theo giờ thực tế của tháng/tuần + liên tục + >= 2 chu kỳ).
+        summary.sufficient_for_trend = trend_series_feasible(finite_df)
 
         summaries[str(metric_name)] = summary
 
@@ -302,23 +320,25 @@ def evaluate_data_quality(df: pd.DataFrame) -> QualityReport:
             f"(< {MIN_VALID_RECORDS_PER_METRIC} yêu cầu)."
         )
 
-    # Đánh giá khả năng đáp ứng theo từng thuật toán
+    # Đánh giá khả năng đáp ứng theo từng thuật toán.
+    # Mỗi điều kiện phải khớp với điều kiện thật của thuật toán tương ứng:
+    # - resampling/histogram: cần >= 1 giá trị hữu hạn (histogram chỉ 3 metric).
+    # - temporal_pattern: >= MIN_TEMPORAL_PATTERN_OBSERVATIONS quan sát distinct theo metric.
+    # - trend: trend_series_feasible dùng chung logic bucket với decompose.
+    # - correlation: correlation_feasible kiểm tra cặp quan sát ghép đôi >= 3
+    #   và phương sai > 0, không chỉ đếm metric có variance.
     hist_metrics = ("http_traffic", "l7_attack", "bot_share")
-    valid_with_variance = [
-        s for s in summaries.values()
-        if s.valid_records >= 2 and (s.std_value or 0.0) > 1e-9
-    ]
 
     algorithm_fitness = {
         "resampling": any(s.sufficient_for_resampling for s in summaries.values()),
         "histogram": any(
-            summaries[m].sufficient_for_resampling
+            summaries[m].sufficient_for_histogram
             for m in hist_metrics
             if m in summaries
         ),
-        "seasonal": any(s.sufficient_for_seasonal for s in summaries.values()),
+        "temporal_pattern": any(s.sufficient_for_temporal_pattern for s in summaries.values()),
         "trend": any(s.sufficient_for_trend for s in summaries.values()),
-        "correlation": len(valid_with_variance) >= 2,
+        "correlation": correlation_feasible(df),
     }
 
     # Đánh giá status: usable, partial, unusable

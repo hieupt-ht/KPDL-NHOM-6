@@ -1,6 +1,5 @@
 # Disposable backend verification. No .env, host ports, production volumes or CF token.
 x-logic: &logic
-  AUTH_ENABLED: "true"
   SCHEDULER_ENABLED: "false"
   JOB_TRIGGER_TOKEN: test-only-internal-token
   WAREHOUSE_DSN: postgresql://logic_user:test-logic-only@warehouse-db:5432/test_warehouse
@@ -49,27 +48,6 @@ services:
       test: ["CMD-SHELL", "pg_isready -U test_admin -d test_mart"]
       <<: *python-health
 
-  keycloak:
-    image: quay.io/keycloak/keycloak:26.8.2
-    command: start-dev --db=dev-mem --import-realm
-    mem_limit: 512m
-    environment:
-      KC_HOSTNAME: http://localhost:8080
-      KC_HEALTH_ENABLED: "true"
-      JAVA_OPTS_KC_HEAP: "-Xms64m -Xmx256m"
-      JAVA_OPTS_APPEND: "-XX:ActiveProcessorCount=2"
-      KEYCLOAK_CLIENT_SECRET: test-only-client-secret
-      KEYCLOAK_DEMO_PASSWORD: test-only-viewer-password
-      KEYCLOAK_ADMIN_PASSWORD: test-only-admin-password
-    volumes:
-      - ../../../keycloak/realm-export.json:/opt/keycloak/data/import/cyber-radar-realm.json:ro
-    healthcheck:
-      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9000; printf 'GET /health/ready HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3; IFS= read -r line <&3; [[ \"$$line\" == *' 200 '* ]]"]
-      interval: 5s
-      timeout: 5s
-      retries: 45
-      start_period: 30s
-
   analysis:
     build: {context: ../../.., dockerfile: services/analysis/Dockerfile}
     environment: *logic
@@ -107,12 +85,8 @@ services:
     environment:
       <<: *logic
       MART_DSN: postgresql://api_user:test-api-only@mart-db:5432/test_mart
-      KEYCLOAK_ISSUER: http://localhost:8080/realms/cyber-radar
-      KEYCLOAK_JWKS_URL: http://keycloak:8080/realms/cyber-radar/protocol/openid-connect/certs
-      KEYCLOAK_AUDIENCE: cyber-radar-api
     depends_on:
       mart-db: {condition: service_healthy}
-      keycloak: {condition: service_healthy}
     healthcheck:
       <<: *python-health
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"]
@@ -121,17 +95,11 @@ services:
     build: {context: ../../.., dockerfile: services/api/tests/Dockerfile}
     volumes: ["ml-models:/test-models:ro"]
     environment:
-      AUTH_ENABLED: "false"
       SCHEDULER_ENABLED: "false"
       TEST_MART_ADMIN_DSN: postgresql://test_admin:test-admin-only@mart-db:5432/test_mart
       TEST_MART_API_DSN: postgresql://api_user:test-api-only@mart-db:5432/test_mart
       TEST_MART_LOGIC_DSN: postgresql://logic_user:test-logic-only@mart-db:5432/test_mart
       TEST_WAREHOUSE_ADMIN_DSN: postgresql://test_admin:test-admin-only@warehouse-db:5432/test_warehouse
-      TEST_KEYCLOAK_URL: http://localhost:8080/realms/cyber-radar
-      TEST_KEYCLOAK_INTERNAL_URL: http://keycloak:8080/realms/cyber-radar
-      TEST_KEYCLOAK_CLIENT_SECRET: test-only-client-secret
-      TEST_KEYCLOAK_DEMO_PASSWORD: test-only-viewer-password
-      TEST_KEYCLOAK_ADMIN_PASSWORD: test-only-admin-password
       TEST_API_URL: http://api:8000
       TEST_ANALYSIS_URL: http://analysis:8001
       TEST_CLUSTERING_URL: http://clustering:8002

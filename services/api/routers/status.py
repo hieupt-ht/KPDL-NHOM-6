@@ -2,13 +2,13 @@
 
 from typing import Annotated
 
-from auth import require_user
-from dependencies import SnapshotRange, get_mart
 from fastapi import APIRouter, Depends
 from psycopg import Connection
+
+from dependencies import SnapshotRange, get_mart
 from schemas import StatusResponse
 
-router = APIRouter(dependencies=[Depends(require_user)], tags=["Status"])
+router = APIRouter(tags=["Status"])
 
 
 @router.get("/status", response_model=StatusResponse)

@@ -5,21 +5,18 @@ export class ApiError extends Error {
 }
 
 type Query = Record<string, string | number | undefined>;
-type TransportOptions = { baseUrl: string; getToken: () => Promise<string | null>; fetcher?: typeof fetch };
+type TransportOptions = { baseUrl: string; fetcher?: typeof fetch };
 
-export function createApiTransport({ baseUrl, getToken, fetcher = fetch }: TransportOptions) {
+export function createApiTransport({ baseUrl, fetcher = fetch }: TransportOptions) {
   async function send(path: string, query: Query = {}, init?: RequestInit): Promise<Response> {
-    const token = await getToken();
-    if (!token) throw new ApiError(401, "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.");
     const target = new URL(`/api/${path}`, baseUrl);
     for (const [key, value] of Object.entries(query)) if (value !== undefined && value !== "") target.searchParams.set(key, String(value));
     const headers = new Headers(init?.headers);
-    headers.set("Authorization", `Bearer ${token}`);
     const response = await fetcher(target.toString(), { ...init, headers, cache: "no-store" });
     if (!response.ok) {
       const message = response.status === 404 ? "Data Mart chưa có dữ liệu cho lựa chọn này." :
-        response.status === 401 ? "Phiên đăng nhập không hợp lệ hoặc đã hết hạn." :
-        response.status === 403 ? "Tài khoản không có quyền thực hiện thao tác này." :
+        response.status === 401 ? "API từ chối yêu cầu." :
+        response.status === 403 ? "API không cho phép thao tác này." :
         response.status === 409 ? "Tác vụ đang chạy. Hãy kiểm tra trạng thái trước khi thử lại." :
         response.status === 504 ? "Chưa xác nhận được yêu cầu chạy. Kiểm tra trạng thái trước khi gửi lại." :
         response.status === 422 ? "Tham số lọc chưa phù hợp với hợp đồng API." :

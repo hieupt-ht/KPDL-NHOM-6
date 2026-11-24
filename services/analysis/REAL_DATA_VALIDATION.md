@@ -148,3 +148,89 @@ Tất cả endpoint đọc Gold thật, response shape khớp `docs/api-contract
 - ⚠️ API contract đạt trên dev-auth; frontend UI và JWT path chưa kiểm chứng.
 
 Điều kiện để chuyển sang nghiệm thu: cung cấp `CF_API_TOKEN` thật + chạy ingestion backfill, sau đó lặp lại §3–§4 trên dữ liệu thật; bật `AUTH_ENABLED=true` + Keycloak để verify JWT/admin path; chạy frontend live mode để đóng §7.
+
+---
+
+# PROMPT 3.5 — KIỂM CHỨNG DỮ LIỆU (2026-11-22)
+
+## A. Kiểm tra điều kiện tiên quyết — KHÔNG ĐẠT cho dữ liệu Radar thật
+
+| Điều kiện | Kết quả | Bằng chứng |
+|---|---|---|
+| CF_API_TOKEN hợp lệ | ❌ **Token bị từ chối** | `curl https://api.cloudflare.com/client/v4/radar/http/timeseries?dateRange=1d&location=VN` với `Authorization: Bearer $CF_API_TOKEN` → HTTP 400, `code 9106 "Authentication failed"`. Token trong `.env` dài 29 ký tự, không phải placeholder, nhưng Cloudflare không chấp nhận (hết hạn/thu hồi/sai). |
+| Ingestion chạy được | ❌ **Không build được image** | `docker compose build ingestion` → pip `ResolutionImpossible` trên `python:3.11-slim` (xung đột pydantic/pydantic-core do release mới; `requirements.txt` không pin cứng). Không phải lỗi code Analysis; cần owner Ingestion xử lý. |
+| `silver.metrics_hourly` có `source='radar'` | ⚠️ Có label, **nhưng không phải dữ liệu Radar thật** | Xem mục B. |
+
+### Bằng chứng silver hiện tại là dữ liệu TỔNG HỢP, không phải Radar thật
+
+- `bronze.raw_api_responses`: **0 dòng** — chưa từng có response API Radar nào được ingestion ghi.
+- `silver.ingestion_runs`: **0 dòng** — ingestion service chưa chạy lần nào trong volume này.
+- `docs/analysis-pipeline-validation.md` (20/11) ghi nhận backfill thật 43.809 dòng (~8.760 metric-dòng, phủ ~365 ngày đến 20/11/2026) — **không khớp** với hiện trạng (xem dưới).
+- Dữ liệu hiện có: 8.400 dòng = 5 metric × 1.680 giờ, `2026-08-02 17:00Z → 2026-10-11 16:00Z` (70 ngày liên tục, 0 timestamp trùng, 0 giờ thiếu), giá trị trông như công thức sin/tuyến tính mượt (ví dụ http_traffic: 0.6 → 0.6797 → 0.7541 → 0.8183 → 0.8680 theo giờ), và pattern lỗi trùng khớp fixture tổng hợp cũ (`l7_attack` 3 NULL, `netflows` 1 non-finite).
+
+→ **Kết luận provenance:** 8.400 dòng `source='radar'` hiện tại là **seed tổng hợp** (ghi trực tiếp SQL hoặc session trước), KHÔNG phải output của Cloudflare Radar ingestion. Mọi kiểm chứng dưới đây là trên **dữ liệu tổng hợp** — hợp lệ để verify thuật toán/writer/idempotency/API, nhưng **không được tuyên bố là nghiệm thu dữ liệu Radar thật**.
+
+## B. Những gì ĐÃ kiểm chứng trên dataset hiện có (TỔNG HỢP)
+
+Môi trường: stack `docker compose` thật — warehouse-db + mart-db (PostgreSQL 16, volume ứng dụng) + analysis (image build lại từ branch hiện tại, gồm Prompt 2A/2B/3) + api (`AUTH_ENABLED=false`).
+
+### B.1. `run_all` trên silver hiện có
+
+- Gọi trực tiếp `tasks.run_all()` trong container analysis: **status=`success`, ~2.3s**.
+- Gọi qua đường production `POST /run` + `X-Job-Token` → **202 run_id=4** → `gold.service_runs.status='success'`, `finished_at` đúng; `/api/status` phản ánh đúng.
+- Log: quality `usable` (phát hiện đúng 2 vấn đề NULL/NaN đã biết); resampled 415; histogram 60 bins/3 metric; trend fallback week 30 bản ghi; temporal_pattern 170; correlation 25 cặp; **"Freshness cập nhật: True"** (đủ 5/5 nhóm — đúng phương án A).
+
+### B.2. Đối chiếu độc lập Gold ↔ SQL thủ công (cùng snapshot silver)
+
+| Kiểm tra | Kết quả |
+|---|---|
+| Resample day VN 2026-08-03, http_traffic | mean/min/max **khớp tuyệt đối** (0.6224563581583934 / 0.33477449009293664 / 0.9123260466978156, n=24) |
+| Resample week T2 2026-08-03→10 (168h) | mean=0.6167, min/max **khớp** gold |
+| Resample month T9/2026 VN (720h) | mean=0.8139423781151559 vs gold 0.8139423781151555 (lệch ~4e-16, float) — **khớp** |
+| Histogram tổng count | http_traffic=1680, bot_share=1680, l7_attack=**1677** (=1680−3 NULL → lọc đúng); chỉ 3 metric theo contract |
+| Temporal pattern hour bucket 14 VN | gold 0.6184000000000025 vs SQL độc lập 0.6184000000000023 — **khớp** |
+| Correlation (http_traffic, l7_attack) | SQL `corr()` trên 1.677 cặp đủ hai phía = 0.47110072605460185 vs gold 0.4711007260545994 — **khớp** (~2e-15) |
+| Trend | month path loại đúng (2 điểm < 24 yêu cầu) → fallback week; bucket tháng cuối T10/2026 bị trim (264h = 35.5% < 90%) — đúng thiết kế; 6 điểm trend/metric sau trim NaN 2 đầu của seasonal_decompose |
+| `latest_silver_ts` | = `2026-10-11 16:00Z` = **max(ts) silver thật**, không phải `now()` |
+| Temporal cycle | log xác nhận `hour_of_day, day_of_week` cho cả 5 metric; **month KHÔNG confirmed** (dữ liệu <12 tháng) — đúng logic distinct-cycle |
+
+### B.3. Idempotency trên Postgres thật
+
+Chạy `run_all` 3 lần (2 lần exec trực tiếp + 1 lần qua `/run`). So sánh dump toàn bảng trước/sau:
+
+- `timeseries_resampled`, `histogram`, `trend`, `seasonal`: **giống hệt từng byte** sau sort → không duplicate, deterministic.
+- `correlation`: `(var_x, var_y, coef)` giống hệt; chỉ `computed_at` đổi (đúng contract — timestamp ghi).
+- `data_freshness`: `latest_silver_ts` giữ nguyên; `computed_at` cập nhật mỗi lần đủ 5/5 nhóm.
+
+### B.4. API readback (AUTH_ENABLED=false, dev identity)
+
+| Endpoint | Kết quả |
+|---|---|
+| `/api/histogram` | 200 cho http_traffic/l7_attack/bot_share; **404 cho human_share/netflows** (contract gap F2 đã biết, FE có empty-state) |
+| `/api/trend?granularity=week` | 200 cả 5 metric; `granularity=month` sẽ 404 (đúng — không có month trend) |
+| `/api/seasonal` | 200 cả 5 metric × 3 period_type; month bucket trả `8,9,10` (T8/T9/T10 — khớp nhãn FE `T${bucket}`) |
+| `/api/correlation` | 200, 25 cặp, `coef` ∈ [−1,1], đường chéo =1 |
+| `/api/timeseries`, `/api/status` | 200; status trả `service_runs` mới nhất + `data_freshness` đúng |
+
+### B.5. Frontend
+
+**Chưa kiểm thử được:** frontend image chưa build (`AUTH_ENABLED=false`, live mode yêu cầu `AUTH_ENABLED=true` + Keycloak + rebuild với `NEXT_PUBLIC_DATA_MODE=api`). Contract FE↔API đã verify bằng code ở Prompt 1/3 (nhãn tháng `T${bucket}` khớp bucket 1..12; dow `T2..CN` khớp 0..6; heatmap lọc null; histogram empty-state cho metric không hỗ trợ).
+
+## C. Phát hiện mới
+
+1. **CF_API_TOKEN không còn hiệu lực** (9106 auth failed) → chặn toàn bộ việc thu thập Radar mới. Cần người quản lý token cấp lại.
+2. **Image `ingestion` không build được** do xung đột dependency pip (pydantic/pydantic-core releases mới vs `requirements.txt` chưa pin) → kể cả khi có token, ingestion hiện không chạy được trên môi trường này. Cần owner Ingestion pin version hoặc cập nhật requirements.
+3. **Silver `source='radar'` hiện tại là dữ liệu tổng hợp** — cần cảnh báo cho mọi người không diễn giải kết quả Gold hiện tại là "dữ liệu Radar thật".
+4. `run_all` gọi trực tiếp (không qua `/run`) **không ghi `gold.service_runs`** — đúng thiết kế (journal thuộc `common.runner`), nhưng cần lưu ý khi vận hành thủ công.
+
+## D. Kết luận
+
+**CHƯA ĐỦ ĐIỀU KIỆN NGHIỆM THU dữ liệu Radar thật** — điều kiện tiên quyết không đạt:
+
+- Không có token Radar hợp lệ → không thể backfill/fetch dữ liệu thật.
+- Ingestion image không build được → không chạy được pipeline thu thập.
+- Silver hiện có là tổng hợp → không đủ căn cứ tuyên bố kiểm chứng trên dữ liệu Cloudflare thật.
+
+**Đã kiểm chứng được (trên dữ liệu tổng hợp, Postgres thật):** toàn bộ thuật toán đối chiếu độc lập khớp; writer transaction/idempotency đúng; freshness phương án A hoạt động (chỉ cập nhật khi đủ 5/5 nhóm); API readback đúng contract; `run_all` qua runner thật → `success` + journal.
+
+**Điều kiện để nghiệm thu thật:** (1) token Radar mới → (2) sửa build ingestion → (3) backfill → (4) lặp lại §B trên dữ liệu thật → (5) frontend live mode.

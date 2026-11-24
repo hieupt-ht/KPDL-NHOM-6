@@ -2,10 +2,10 @@
 
 from typing import Annotated, Literal
 
-from auth import require_user
-from dependencies import SnapshotRange, TimeRange, get_mart
 from fastapi import APIRouter, Depends
 from psycopg import Connection, sql
+
+from dependencies import SnapshotRange, TimeRange, get_mart
 from repository import read_rows, require_rows, time_conditions
 from schemas import (
     CorrelationPoint,
@@ -16,7 +16,7 @@ from schemas import (
     TrendPoint,
 )
 
-router = APIRouter(dependencies=[Depends(require_user)], tags=["Analysis"])
+router = APIRouter(tags=["Analysis"])
 Mart = Annotated[Connection, Depends(get_mart)]
 Snapshot = Annotated[SnapshotRange, Depends()]
 
