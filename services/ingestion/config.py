@@ -2,7 +2,9 @@
 
 import os
 
-BACKFILL_TARGET_DAYS = 365
+# Độ sâu backfill (ngày). Mặc định 365; đặt biến môi trường BACKFILL_TARGET_DAYS để lấy sâu hơn.
+# Backfill tự dừng khi Radar hết dữ liệu cũ nên đặt lớn là an toàn.
+BACKFILL_TARGET_DAYS = int(os.environ.get("BACKFILL_TARGET_DAYS") or 365)
 CHUNK_DAYS = 28
 OVERLAP_DAYS = 2
 
