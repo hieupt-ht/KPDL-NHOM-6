@@ -56,29 +56,37 @@ Cộng lại khoảng **35–65 USD/tháng nếu bật liên tục**, tức ngâ
 - `CF_API_TOKEN` của Cloudflare Radar (token chỉ đọc).
 - Chọn **một region** mà subscription cho phép và có đủ PostgreSQL, Container Apps, Functions và VM. Sinh viên hay gặp lỗi chính sách region hoặc [size VM bị chặn](https://learn.microsoft.com/en-us/answers/questions/5640602/azure-for-students-cannot-create-vm-due-to-region). Thử `southeastasia`, không được thì đổi region và làm lại từ đầu mục này.
 
-Lưu khối biến sau vào `~/kpdl-azure.env` (**ngoài repo**, không commit) rồi `source` ở mỗi phiên làm việc mới:
+Tạo file `~/kpdl-azure.env` **một lần duy nhất** (ngoài repo, không commit). Lệnh dưới sinh giá trị ngẫu nhiên rồi ghi **giá trị cố định** vào file; về sau chỉ `source` file này ở mỗi phiên mới, đừng chạy lại lệnh tạo:
 
 ```bash
+SUF=$(openssl rand -hex 3)                   # hậu tố để tên toàn cầu không trùng
+cat > ~/kpdl-azure.env <<EOF
 export LOC=southeastasia
-export SUF=$(openssl rand -hex 3)            # hậu tố để tên toàn cầu không trùng
+export SUF=$SUF
 export RG=kpdl-rg
 export PG=kpdl-pg-$SUF
-export ACR=kpdlacr$SUF                       # chỉ chữ thường và số
+export ACR=kpdlacr$SUF
 export CAE=kpdl-env
 export STG=kpdlstg$SUF
 export FUNC=kpdl-func-$SUF
 export VM=kpdl-vm
 
 export PGADMIN=pgadmin
-export PGADMIN_PW=$(openssl rand -hex 16)
-export INGESTION_DB_PASSWORD=$(openssl rand -hex 16)
-export LOGIC_DB_PASSWORD=$(openssl rand -hex 16)
-export API_DB_PASSWORD=$(openssl rand -hex 16)
-export JOB_TRIGGER_TOKEN=$(openssl rand -hex 24)
-export CF_API_TOKEN='<token Radar thật>'
+export PGADMIN_PW='Aa1-$(openssl rand -hex 16)'
+export INGESTION_DB_PASSWORD='$(openssl rand -hex 16)'
+export LOGIC_DB_PASSWORD='$(openssl rand -hex 16)'
+export API_DB_PASSWORD='$(openssl rand -hex 16)'
+export JOB_TRIGGER_TOKEN='$(openssl rand -hex 24)'
+export CF_API_TOKEN='<dán token Radar thật vào đây>'
+EOF
+chmod 600 ~/kpdl-azure.env
+nano ~/kpdl-azure.env                        # thay CF_API_TOKEN bằng token thật rồi lưu
+source ~/kpdl-azure.env
 ```
 
-Mật khẩu dùng hex để không có ký tự đặc biệt (chúng nằm trong chuỗi kết nối dạng URL). Khi `source` lại phải dùng đúng file đã lưu, đừng sinh mật khẩu mới.
+Các tên và mật khẩu này **độc lập với `.env` chạy local**. Trên Azure chỉ có **một** PostgreSQL server với **một** tài khoản quản trị (`PGADMIN`), chứa hai database `warehouse` và `mart`; không dùng các biến `WAREHOUSE_ADMIN_*` và `MART_ADMIN_*` của Compose. Ba mật khẩu `INGESTION_DB_PASSWORD`, `LOGIC_DB_PASSWORD`, `API_DB_PASSWORD` do script ở bước 4 gán cho ba user ứng dụng; `JOB_TRIGGER_TOKEN` là token chung giữa API/Function và các service `/run`.
+
+Quy tắc của Azure cho tài khoản quản trị: tên không được là `admin`, `administrator`, `root`, `guest`, `public`, `azure_superuser` hoặc bắt đầu bằng `pg_`; mật khẩu dài 8 đến 128 ký tự và có ký tự từ ít nhất 3 trong 4 nhóm (chữ hoa, chữ thường, số, ký tự đặc biệt). Vì vậy `PGADMIN_PW` có tiền tố `Aa1-`. Ba mật khẩu ứng dụng chỉ dùng hex để không có ký tự đặc biệt (chúng nằm trong chuỗi kết nối dạng URL). Nếu tạo server bằng Portal, nhập đúng `PGADMIN` và `PGADMIN_PW` trong file này vào ô Admin username và Password.
 
 Đăng ký provider (một lần):
 
