@@ -1,0 +1,160 @@
+# Phần Machine Learning
+
+Gồm: huấn luyện offline (`training/`), mô hình đã lưu (`models/`), hai service chỉ **nạp mô hình và chạy** (`services/clustering/`, `services/prediction/`).
+
+```text
+Silver: silver.metrics_hourly ──► training/train_models.py ──► models/*.joblib + metrics.json
+        (ts, value, metric)                                          │ (nạp, không huấn luyện lại)
+                                              ┌──────────────────────┴───────────────┐
+                                              ▼                                       ▼
+                                   services/clustering (00:30 VN)        services/prediction (5 phút)
+                                              │                                       │
+                                  gold.cluster_results            gold.forecast_continuous / forecast_discrete
+                                              └──────── gold.service_runs (nhật ký) ──┘
+```
+
+## 1. Đặc trưng (`services/prediction/features.py`)
+
+Quyết định theo Issue #13; mọi tham số nằm trong `services/prediction/ml_config.json`.
+
+- **Ngày tính theo giờ Việt Nam** (`Asia/Ho_Chi_Minh`, 17:00 UTC hôm trước đến 17:00 UTC hôm sau). Silver vẫn lưu UTC.
+- **Chỉ đọc Silver nguồn Radar** (`source = 'radar'`, giống Analysis), dòng demo không vào mô hình.
+- **Ngày chỉ hợp lệ khi đủ 24 mốc giờ.** Ngày thiếu hoặc chưa đủ (thường là ngày cuối vì Radar trễ) là NaN, không bao giờ được dùng.
+- **Dự báo D+2 tính từ ngày đủ dữ liệu cuối** (`horizon_days = 2`): đặc trưng của ngày đích D chỉ dùng ngày ≤ D−2. Khi hôm qua đã đủ dữ liệu thì D = ngày mai, đúng với API ("ngày mai" theo giờ VN). Vì không cần dữ liệu của hôm nay (chưa đủ giờ) nên không phải dự báo từ ngày thiếu.
+
+Bộ hồi quy (metric `http_traffic`):
+
+| Cột | Ý nghĩa |
+| :--- | :--- |
+| `value` | trung bình ngày (nhãn của bộ hồi quy) |
+| `lag_2`, `lag_7` | giá trị 2 và 7 ngày trước ngày đích |
+| `roll_mean_3`, `roll_mean_7` | trung bình trượt 3 và 7 ngày kết thúc ở D−2 |
+| `dow` | thứ của ngày đích (0 = thứ Hai) |
+
+Bộ phân loại dùng thêm `risk_lag_2`, `risk_lag_7`, `risk_roll_mean_3`, `risk_roll_mean_7`, `risk_ref` tính từ metric rủi ro `l7_attack` (và `risk_value` làm nhãn gốc). Lag của ngày thiếu giữ NaN để đúng lịch; dòng thiếu đặc trưng bị bỏ. Cần ít nhất 14 ngày đủ dữ liệu (nửa cửa sổ 28 ngày của `risk_ref`) mới dự báo được.
+
+Phân cụm dùng đặc trưng riêng theo ngày VN (README gốc 5.2): `http_mean` (trung bình `http_traffic`), `l7_max` (max `l7_attack`), `bot_mean` (trung bình `bot_share`, đơn vị %).
+
+## 2. Huấn luyện
+
+Nhánh tích hợp đang kiểm chứng đề xuất rolling 28 ngày của [Issue #29](https://github.com/hieupt-ht/KPDL-NHOM-6/issues/29), chưa coi là quyết định chung thay Issue #13. Cần nhóm xác nhận định nghĩa nhãn trước khi triển khai mô hình mới.
+
+```bash
+docker compose --profile training run --rm trainer
+# Dữ liệu giả: chỉ dùng riêng khi kiểm thử, không nghiệm thu dữ liệu thật.
+docker compose --profile training run --rm trainer --demo --out-dir /app/models/validation
+```
+
+| Tham số | Mặc định | Ý nghĩa |
+| :--- | :--- | :--- |
+| `--metric` | `http_traffic` | metric đích của bộ hồi quy |
+| `--risk-metric` | `l7_attack` | metric tạo nhãn rủi ro |
+| `--demo` | tắt | dùng dữ liệu giả (180 ngày, đủ 3 metric) |
+| `--k` | 3 (config) | ép số cụm; `--k` bỏ trống trong code (`k=None`) thì chọn k ∈ [2, 6] có Silhouette cao nhất |
+| `--risk-percentile` | 75 | mode train: percentile tập train; mode rolling: phải khớp percentile trong config dùng tạo `risk_ref` |
+| `--min-days` | 30 | Silver ít hơn số ngày này thì dừng, không tự tạo mô hình demo |
+| `--out-dir` | `models/` | thư mục lưu kết quả |
+
+Chia train/test **theo thời gian** (80% đầu train, 20% cuối test), không xáo trộn. Seed cố định 42.
+
+### Ba mô hình
+
+| File | Mô hình | Đầu vào | Đầu ra |
+| :--- | :--- | :--- | :--- |
+| `kmeans.joblib` | `StandardScaler` + `KMeans` (k = 3) | `http_mean`, `l7_max`, `bot_mean` | `cluster_id` |
+| `rf_regressor.joblib` | `RandomForestRegressor` (300 cây, `min_samples_leaf` chọn trong `training.rf_min_samples_leaf_grid` theo MAE trên `val_ratio` cuối tập train) | `lag_2, lag_7, roll_mean_3, roll_mean_7, dow` | **chênh lệch** `value − lag_2` (đầu vào tương đối: `lag_7`, `roll_mean_*` trừ `lag_2`, bỏ `lag_2`, giữ `dow`; cộng lại `lag_2` khi dự báo; `training.regressor_target`: `delta`/`level`) → trung bình `http_traffic` của ngày đích |
+| `rf_classifier.joblib` | `RandomForestClassifier` (300 cây, `class_weight=balanced`) | đặc trưng hồi quy + 4 đặc trưng `risk_*` | P(High); High = trung bình ngày `l7_attack` > `risk_ref` = p75 của 28 ngày đã biết trước đó (≤ ngày đích − 2; `risk.label_mode: rolling`, `rolling_days`), tức tăng đột biến so với gần đây; `label_mode: train` dùng lại p75 cố định của tập train. Đầu vào tương đối: `risk_*` trừ `risk_ref`, traffic trừ `lag_2`. Cutoff P(High) chọn theo F1 trên `val_ratio` cuối tập train (`risk.tune_cutoff`), lưu `proba_cutoff` trong bundle; service dùng cutoff này |
+
+Mỗi `.joblib` là dict `{"model", "features", ...metadata}`: `features` là **thứ tự cột** service phải dùng; metadata gồm `data_source` (`silver`/`demo`), `metric`, `risk_metric`, `horizon_days`, `timezone`, `trained_at`, `n_days`, `train_range`, `test_range`. Classifier có thêm `risk_threshold`, `risk_percentile`, `risk_label_mode`, `risk_rolling_days`, `proba_cutoff`. Service từ chối mô hình khác horizon/múi giờ/định nghĩa nhãn; mode rolling phải khớp cửa sổ và percentile của `risk_ref`. Artifact cũ thiếu metadata rolling cần train lại.
+
+### `models/metrics.json`
+
+| Khóa | Nội dung |
+| :--- | :--- |
+| `kmeans` | `k`, `silhouette`, `scores_by_k`, `cluster_profile` (mean/count từng đặc trưng theo cụm) |
+| `rf_regressor` | `mae`, `rmse`, `baseline_naive_mae` (đoán "ngày đích = giá trị ngày đủ gần nhất", lag nhỏ nhất; MAE phải thấp hơn mốc này) |
+| `rf_classifier` | `risk_metric`, `risk_percentile`, `risk_threshold` (đơn vị của metric rủi ro), `proba_cutoff`, `accuracy`, `f1`, `train_high_ratio`, `test_high_ratio`, `n_train_days`, `n_test_days` |
+
+> Nếu `data_source` = `demo`, các số này **không** phản ánh dữ liệu thật. Không đưa vào báo cáo. Silhouette < 0.25 thì cụm không tách rõ (script tự cảnh báo).
+
+## 3. Service
+
+Cả hai là FastAPI + APScheduler (khung ở `backend/common/runner.py`), đọc `models/` qua `MODELS_DIR`.
+
+| Service | Port | Lịch | Nhiệm vụ |
+| :--- | :--- | :--- | :--- |
+| `clustering` | 8002 | cron hằng ngày 00:30 giờ VN (`CLUSTERING_CRON_HOUR/MINUTE`) | gán cụm cho **mọi ngày** có đủ đặc trưng |
+| `prediction` | 8003 | mỗi 5 phút (`PREDICTION_INTERVAL_SECONDS`) | dự báo ngày đích (liên tục + rời rạc) |
+
+Biến môi trường: `WAREHOUSE_DSN`, `MART_DSN`, `MODELS_DIR` (compose mount `./models:/app/models:ro` cho cả hai service), `SCHEDULER_ENABLED`, `TZ_LOCAL`.
+
+### Cách gọi
+
+```bash
+# Chạy qua Docker (cần đã train, có models/*.joblib)
+docker compose up -d --build clustering prediction
+curl http://localhost:8002/health        # {"status":"ok","service":"clustering"}
+curl http://localhost:8003/health
+
+```
+
+Chạy qua trang Vận hành bằng tài khoản Admin hoặc Jobs API:
+
+- POST /api/jobs/clustering/run hoặc /api/jobs/prediction/run trả 202 và run_id.
+- Poll GET /api/jobs/runs/{run_id}; 202 chỉ là đã nhận yêu cầu.
+- common.runner sở hữu duy nhất một nhật ký/khóa chạy. Thiếu dữ liệu trả skipped, thiếu mô hình hoặc lỗi ghi dữ liệu trả failed; lỗi công khai được runner làm sạch.
+- API đọc Gold đã hoạt động; bảng trống trả 404. Forecast mặc định lấy ngày mai theo giờ Việt Nam, nên dữ liệu trễ có thể vẫn trả 404; dùng start/end để xem ngày đích đã ghi.
+
+### Đầu vào / đầu ra
+
+**Đầu vào:** `silver.metrics_hourly` (cột `ts`, `value`, `metric`) qua `WAREHOUSE_DSN`. **Đầu ra:** Mart qua `MART_DSN`, tất cả dùng `UPSERT` nên chạy lặp vẫn idempotent.
+
+| Bảng Gold | Khóa | Cột | Do |
+| :--- | :--- | :--- | :--- |
+| `cluster_results` | `date` | `cluster_id`, `cluster_name`, `features` (JSONB: `http_mean`, `l7_max`, `bot_mean`, `metric` = `http_traffic`), `computed_at` | clustering |
+| `forecast_continuous` | `target_date` | `predicted_value`, `model_name`, `created_at` | prediction |
+| `forecast_discrete` | `target_date` | `label` (`Cao`/`Thấp`), `probability` (= P(Cao), kể cả khi nhãn là Thấp), `model_name`, `created_at` | prediction |
+| `service_runs` | `id` | `service`, `started_at`, `finished_at`, `status` (`running`/`success`/`failed`/`skipped`), `error` | common.runner |
+
+Quy ước:
+
+- **Ngày (`date`, `target_date`) tính theo giờ VN**, chỉ ngày đủ 24 giờ.
+- **`target_date`** = ngày đủ dữ liệu mới nhất + 2. Ví dụ chạy ngày 21/11 (VN) khi 20/11 đã đủ thì `target_date` = 22/11. Nếu Silver chậm và 20/11 chưa đủ, dòng được ghi cho 21/11. Mỗi lượt upsert 1 dòng mỗi bảng; dòng các ngày trước được giữ.
+- **`cluster_name`** theo tâm cụm (README 5.2): `Bất thường` = cụm có `l7_max` hoặc `bot_mean` cao nhất (chuẩn hóa); trong hai cụm còn lại `Cao điểm` = `http_mean` cao hơn, `Bình thường` = thấp hơn. k ≠ 2, 3 dùng `Cụm 1..k` theo traffic tăng dần.
+- **`label`** = `Cao` nếu P(High) ≥ cutoff của bundle, ngược lại `Thấp`; 0.5 chỉ là cấu hình khởi đầu. API/FE không tự đổi nhãn từ xác suất.
+- **`model_name`** = `<rf_regressor|rf_classifier>/<data_source>/<trained_at>`.
+- Thiếu mô hình hoặc mô hình khác `horizon_days` → lỗi (ghi `service_runs.status='failed'`). Thiếu dữ liệu → không ghi dự báo mới, runner ghi `skipped`; giữ kết quả cũ.
+
+Payload mẫu cho Frontend:
+
+```json
+// gold.cluster_results
+{"date": "2026-11-20", "cluster_id": 1, "cluster_name": "Bất thường",
+ "features": {"http_mean": 101.6, "l7_max": 55.2, "bot_mean": 54.8, "metric": "http_traffic"}}
+// gold.forecast_discrete
+{"target_date": "2026-11-22", "label": "Thấp", "probability": 0.31, "model_name": "rf_classifier/silver/2026-11-21T03:00:00+00:00"}
+```
+
+## 4. Kiểm thử
+
+```bash
+bash training/tests/run.sh                 # Windows: ./training/tests/run.ps1
+bash services/api/tests/run.sh all         # Windows: ./services/api/tests/run.ps1 -Mode All
+```
+
+Đánh giá offline bằng Docker (có baseline hồi quy và phân loại luôn Cao/luôn Thấp):
+
+```bash
+docker compose --profile training build trainer
+docker compose --profile training run --rm trainer --out-dir /app/models/validation/issue29
+docker compose --profile training run --rm --entrypoint python trainer training/evaluate_models.py --models-dir /app/models/validation/issue29
+```
+
+## 5. Lưu ý và việc còn mở
+
+- Sau khi đổi `ml_config.json` (đặc trưng, metric, horizon, cụm): **train lại**. Service từ chối mô hình khác `horizon_days`. Container clustering và prediction đều đọc cùng `ml_config.json` (copy lúc build), không còn bản sao `cluster_matrix`.
+- Mô hình `.joblib` và metrics sinh ra được gitignore; chỉ nạp artifact tin cậy. Compose mount models chỉ đọc cho hai service.
+- Percentile 75 và cutoff 0.5 là **cấu hình khởi đầu**; chỉnh bằng validation khi có dữ liệu thật.
+- Bộ E2E dùng Silver tổng hợp trong database test và mô hình demo ở volume riêng; chứng minh luồng tích hợp, không thay thế nghiệm thu mô hình thật của Hoàng/Minh.
+- Service dùng đúng phiên bản `scikit-learn~=1.6.0`: train bằng phiên bản khác có thể không nạp được `.joblib`.
+- Kết quả train bằng dữ liệu `demo` không phản ánh Silver thật; train lại với `WAREHOUSE_DSN` trước khi báo cáo.

@@ -63,6 +63,9 @@ data/
 !db/**/*.sql
 # Bỏ comment dòng dưới nếu model quá nặng và dùng Git LFS / script tải về
 # models/*.pkl
+models/*.joblib
+models/metrics.json
+models/validation/
 
 # =========================================================
 #  Docker
@@ -83,5 +86,5 @@ docker-compose.override.yml
 Thumbs.db
 desktop.ini
 
-# Local ML validation artifacts are not application source.
-models/validation/
+# Kết quả đánh giá sinh ra bởi training/evaluate_models.py
+models/eval/

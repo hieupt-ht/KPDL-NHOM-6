@@ -1,0 +1,2 @@
+# Evaluation/plots are offline tools, not dependencies of inference services.
+matplotlib~=3.10.0

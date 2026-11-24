@@ -69,7 +69,7 @@ Rules that span several files:
   - Services never call each other for data. The only exception is the API triggering `POST /run` on the logic services.
 - **The frontend only draws charts.** All computation happens in the backend. Chart data is fetched from the browser (client components, SWR), not in server components. This is deliberate, so requests show up in the DevTools Network tab during the demo.
 - **Empty gold tables make the API return 404.** This is intentional (demo step 5), not a bug.
-- **Models are trained offline** (`training/train_models.py` writes `.pkl` files and `metrics.json` to `models/`). The logic services only load them and never train at runtime.
+- **Models are trained offline** (`docker compose --profile training run --rm trainer` writes `.joblib` files and `metrics.json` to `models/`). Insufficient Silver fails rather than silently training demo data. The logic services mount artifacts read-only and never train at runtime.
 - **Time zones:** store UTC (`TIMESTAMPTZ`). Convert to `Asia/Ho_Chi_Minh` only when bucketing by hour, weekday or "tomorrow".
 
 ### Shared service skeleton

@@ -42,6 +42,8 @@ Forecast mặc định lấy **đúng ngày mai theo lịch Việt Nam**, không
 
 `probability` được đọc theo nghĩa **P(Cao)** (hợp đồng tích hợp đề xuất ở issue #13), kể cả khi `label="Thấp"`. Ví dụ Thấp + 0.2 nghĩa là xác suất Cao 20%, không phải độ tin cậy Thấp 20%. API giữ nguyên kết quả, không tự đảo xác suất hoặc chọn lại nhãn/cutoff. Metric tính rủi ro, percentile và cutoff cần nhóm ML/Analysis chốt; API không coi các giá trị tạm trong PR #12 là quyết định chung.
 
+Issue #29 đề xuất đổi định nghĩa Cao sang vượt p75 của 28 ngày đã biết trước ngày đích (D−2), thay ngưỡng cố định của tập train. Nhánh tích hợp đang kiểm chứng đề xuất này và cutoff được chọn offline trên validation. Đây là thay đổi ý nghĩa nhãn dù schema Gold không đổi; chưa coi là nhóm đã chốt. Client cần dùng `label` từ API và hiển thị P(Cao), không suy ra nhãn bằng ngưỡng 0.5. Ngưỡng rolling `risk_ref` và cutoff xác suất là hai đại lượng khác nhau.
+
 `cluster_results.features` giữ các số đo số/null và hỗ trợ riêng metadata `metric` thuộc danh sách Metric. Ví dụ `{"metric":"http_traffic","value":1.31,"dev_7":null}`. Chỉ khóa `metric` được chứa tên metric dạng chuỗi; các khóa số đo khác vẫn phải là số/null. JSON ngoài không đổi, không thêm cột DB. Frontend không dùng trường metadata hoặc đặc trưng value/lag/rolling làm thay thế HTTP mean/L7 max/bot mean nếu chưa có quy ước. Các tên cụm ngoài Bình thường/Cao điểm/Bất thường cần nhóm thống nhất cách diễn giải, không tự coi Cao là Bất thường.
 
 Status trả một lần chạy mới nhất của mỗi service (started_at giảm dần, id giảm dần để phá hòa; started_at NULL xếp sau). Chưa chạy service nào thì `service_runs=[]`; chưa có freshness thì `data_freshness=null`. Cấu trúc từng phần tử giữ tên trường của frontend/types/api.ts.

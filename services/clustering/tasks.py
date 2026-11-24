@@ -1,18 +1,97 @@
-"""Các tác vụ phân cụm trạng thái từng ngày."""
+"""Các tác vụ phân cụm trạng thái từng ngày.
 
+Luồng: Silver (metrics_hourly) -> đặc trưng ngày (http_mean, l7_max, bot_mean) -> K-Means đã
+huấn luyện (models/kmeans.joblib) -> upsert gold.cluster_results. Ngày tính theo giờ VN và chỉ
+dùng ngày đủ 24 mốc giờ ở cả ba metric, khớp features.build_cluster_features khi huấn luyện.
+
+Tên cụm (README 5.2) đặt theo tâm cụm: Bất thường = cụm có tấn công/bot cao nhất; trong hai cụm
+còn lại, Cao điểm = traffic cao hơn, Bình thường = traffic thấp hơn.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from pathlib import Path
 from typing import Any
 
+import joblib
+import pandas as pd
+from psycopg.types.json import Jsonb
 
-def build_daily_features() -> list[dict[str, Any]]:
-    """Tổng hợp đặc trưng traffic, tấn công và bot theo ngày Việt Nam."""
-    raise NotImplementedError
+from features import DEFAULT_METRIC, build_cluster_features, load_cluster_hourly
+from ml_config import name_clusters
+
+log = logging.getLogger("clustering")
+
+MODELS_DIR = Path(os.environ.get("MODELS_DIR", "/app/models"))
+MODEL_FILE = "kmeans.joblib"
+SERVICE = "clustering"
 
 
-def assign_clusters() -> None:
-    """Nạp mô hình có sẵn, gán cụm và ghi kết quả Gold."""
-    raise NotImplementedError
+def load_bundle(models_dir: Path | str | None = None) -> dict[str, Any]:
+    """Nạp bundle K-Means {"model", "features", "k", ...}; báo lỗi rõ nếu chưa huấn luyện."""
+    path = Path(models_dir or MODELS_DIR) / MODEL_FILE
+    if not path.is_file():
+        raise FileNotFoundError(f"Chưa có mô hình {path}. Chạy training/train_models.py trước.")
+    return joblib.load(path)
 
 
-def run_all() -> None:
-    """Chạy phân cụm; common.runner chịu trách nhiệm ghi nhật ký service_runs."""
-    raise NotImplementedError
+def build_daily_features(conn) -> pd.DataFrame:
+    """Đặc trưng phân cụm theo ngày VN (index = ngày); chỉ giữ ngày đủ giờ ở mọi metric."""
+    return build_cluster_features(load_cluster_hourly(conn))
+
+
+def cluster_names(bundle: dict[str, Any]) -> dict[int, str]:
+    """Ánh xạ cluster_id -> tên theo tâm cụm (ml_config.name_clusters)."""
+    # Tâm cụm đã chuẩn hóa vì StandardScaler đứng trước KMeans trong pipeline.
+    return name_clusters(bundle["model"][-1].cluster_centers_, list(bundle["features"]))
+
+
+def assign_clusters(features: pd.DataFrame, bundle: dict[str, Any], mart_conn, metric: str = DEFAULT_METRIC) -> int:
+    """Gán cụm cho từng ngày và upsert vào gold.cluster_results. Trả về số dòng ghi."""
+    if features.empty:
+        return 0
+    X = features[list(bundle["features"])]
+    ids = bundle["model"].predict(X)
+    names = cluster_names(bundle)
+    rows = [
+        (
+            idx.date(),
+            int(cid),
+            names[int(cid)],
+            Jsonb({**{c: float(v) for c, v in row.items()}, "metric": metric}),
+        )
+        for idx, cid, (_, row) in zip(features.index, ids, X.iterrows())
+    ]
+    with mart_conn.cursor() as cur:
+        cur.executemany(
+            "INSERT INTO gold.cluster_results (date, cluster_id, cluster_name, features, computed_at) "
+            "VALUES (%s, %s, %s, %s, now()) "
+            "ON CONFLICT (date) DO UPDATE SET cluster_id = EXCLUDED.cluster_id, "
+            "cluster_name = EXCLUDED.cluster_name, features = EXCLUDED.features, computed_at = now()",
+            rows,
+        )
+    return len(rows)
+
+
+def run_clustering(warehouse_conn, mart_conn, models_dir: Path | str | None = None, metric: str = DEFAULT_METRIC) -> int:
+    """Ghi kết quả; common.runner sở hữu nhật ký và trạng thái lỗi."""
+    try:
+        bundle = load_bundle(models_dir)
+        n = assign_clusters(build_daily_features(warehouse_conn), bundle, mart_conn, metric)
+        mart_conn.commit()
+    except Exception:
+        mart_conn.rollback()
+        raise
+    log.info("Đã gán cụm cho %d ngày (metric=%s, nguồn mô hình: %s)", n, metric, bundle.get("data_source"))
+    return n
+
+
+def run_all() -> str:
+    """Điểm vào cho scheduler: mở hai kết nối và chạy phân cụm."""
+    from common.db import get_mart_conn, get_warehouse_conn
+
+    with get_warehouse_conn() as wh, get_mart_conn() as mart:
+        n = run_clustering(wh, mart)
+    return "success" if n else "skipped"

@@ -10,10 +10,11 @@ COMPOSE=(docker compose --file services/api/tests/compose.yml --project-name "$P
 cleanup() { status=$?; trap - EXIT; "${COMPOSE[@]}" down --volumes --remove-orphans || true; exit "$status"; }
 trap cleanup EXIT
 IMAGES=(tests)
-[[ "$MODE" != all ]] || IMAGES=(analysis clustering prediction api tests)
+[[ "$MODE" != all ]] || IMAGES=(model-setup analysis clustering prediction api tests)
 for service in "${IMAGES[@]}"; do "${COMPOSE[@]}" build "$service"; done
 if [[ "$MODE" == all ]]; then
-  "${COMPOSE[@]}" up --no-build --abort-on-container-exit --exit-code-from tests
+  "${COMPOSE[@]}" run --rm --no-deps model-setup
+  "${COMPOSE[@]}" up --no-build --abort-on-container-exit --exit-code-from tests tests
 else
   MARKER='not integration and not stack'
   if [[ "$MODE" == integration ]]; then

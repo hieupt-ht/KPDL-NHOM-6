@@ -12,13 +12,15 @@ $composeArgs = @('compose', '--file', $composeFile, '--project-name', $ProjectNa
 $testExit = 1
 try {
     # Build sequentially to fit developer laptops; Docker reuses service layers.
-    $images = if ($Mode -eq 'All') { @('analysis', 'clustering', 'prediction', 'api', 'tests') } else { @('tests') }
+    $images = if ($Mode -eq 'All') { @('model-setup', 'analysis', 'clustering', 'prediction', 'api', 'tests') } else { @('tests') }
     foreach ($image in $images) {
         & docker @composeArgs build $image
         if ($LASTEXITCODE -ne 0) { throw "Cannot build $image" }
     }
     if ($Mode -eq 'All') {
-        & docker @composeArgs up --no-build --abort-on-container-exit --exit-code-from tests
+        & docker @composeArgs run --rm --no-deps model-setup
+        if ($LASTEXITCODE -ne 0) { throw 'Cannot prepare isolated ML test models' }
+        & docker @composeArgs up --no-build --abort-on-container-exit --exit-code-from tests tests
     } else {
         $marker = 'not integration and not stack'
         if ($Mode -eq 'Integration') {
