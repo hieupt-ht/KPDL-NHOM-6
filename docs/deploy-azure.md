@@ -214,9 +214,9 @@ export LOGIC_DB_PASSWORD='<mật khẩu logic>'
 export API_DB_PASSWORD='<mật khẩu api>'
 export JOB_TRIGGER_TOKEN='<token job>'
 export CF_API_TOKEN='<token Cloudflare Radar>'
-export ACR_NAME="kpdlacr$SUF"
-export ACR_LOGIN="$ACR_NAME.azurecr.io"
-export ACR_PW='<password của registry, trong Access keys>'
+export ACR_NAME='<Username trên trang Access keys của registry>'
+export ACR_LOGIN='<Login server trên trang Access keys, dạng xxx.azurecr.io>'
+export ACR_PW='<password trên trang Access keys>'
 export DOMAIN=''   # để trống, điền sau khi tạo ca-analysis ở bước 11.3
 
 export INGESTION_WAREHOUSE_DSN="postgresql://ingestion_user:$INGESTION_DB_PASSWORD@$PGHOST:5432/warehouse?sslmode=require"
