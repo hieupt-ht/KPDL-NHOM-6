@@ -82,6 +82,19 @@ def test_cors_preflight(client):
     assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
 
 
+def test_cors_origins_default_and_env(monkeypatch):
+    from main import cors_origins
+
+    monkeypatch.delenv("CORS_ORIGINS", raising=False)
+    assert cors_origins() == ["http://localhost:3000"]
+    monkeypatch.setenv("CORS_ORIGINS", "")
+    assert cors_origins() == ["http://localhost:3000"]
+    monkeypatch.setenv(
+        "CORS_ORIGINS", " https://web.example.com/ , http://localhost:3000,, "
+    )
+    assert cors_origins() == ["https://web.example.com", "http://localhost:3000"]
+
+
 @pytest.mark.integration
 def test_timeseries_filters_pagination_and_utc(client, mart):
     url = "/api/timeseries?metric=http_traffic&granularity=day"

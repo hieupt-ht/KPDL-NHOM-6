@@ -1,6 +1,7 @@
 """Điểm vào API đọc Data Mart."""
 
 import logging
+import os
 from typing import Annotated
 
 import psycopg
@@ -11,10 +12,19 @@ from fastapi.responses import JSONResponse
 from dependencies import get_mart
 from routers import analysis, jobs, ml, status, timeseries
 
+DEFAULT_CORS_ORIGINS = "http://localhost:3000"
+
+
+def cors_origins() -> list[str]:
+    """Origin được phép gọi API từ trình duyệt (CORS_ORIGINS, phân tách bằng dấu phẩy)."""
+    raw = os.environ.get("CORS_ORIGINS") or DEFAULT_CORS_ORIGINS
+    return [origin.strip().rstrip("/") for origin in raw.split(",") if origin.strip()]
+
+
 app = FastAPI(title="Cyber Radar VN API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=cors_origins(),
     allow_methods=["GET", "POST"],
     allow_headers=["Authorization", "Content-Type"],
     expose_headers=["X-Total-Count", "X-Limit", "X-Offset"],
