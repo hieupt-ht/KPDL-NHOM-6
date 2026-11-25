@@ -329,7 +329,7 @@ Làm theo 11.2 với bảng sau:
 | :--- | :--- | :--- | :--- | :--- |
 | `ca-analysis` | `kpdl-analysis` : `v1` | 8001 | 0.5 / 1 Gi | 1 / 1 |
 
-Ở tab Basics, mục *Container Apps Environment* bấm **Create new**: tên `kpdl-env`, Environment type **Consumption only**, Zone redundancy tắt; tab Monitoring giữ mặc định (có Log Analytics để xem log khi gặp lỗi); **Create**.
+Ở tab Basics, mục *Container Apps Environment* bấm **Create new**: tên `kpdl-env`, Environment type **Consumption only** (loại chuẩn; **không** chọn *Express*, đây là loại mới còn hạn chế), Zone redundancy tắt; tab Monitoring chọn **Azure Log Analytics** để xem log khi gặp lỗi; **Create**. Nếu Portal báo `ExpressAzureMonitorLogDestNotSupported` thì xem mục 16.
 
 **Biến môi trường `ca-analysis`** (`ca-prediction` và `ca-clustering` ở 11.6 dùng đúng bộ này):
 
@@ -492,6 +492,7 @@ SSH vào VM, `cd ~/KPDL-NHOM-6 && source ~/kpdl.env`, `git pull`, build lại im
 | :--- | :--- |
 | `RequestDisallowedByPolicy`, "location not available", size bị chặn | Tài khoản sinh viên giới hạn region/size. Chọn region khác (và dùng cho **mọi** dịch vụ, làm lại từ đầu mục đó) hoặc size VM khác |
 | Ô **Burstable** của PostgreSQL bị mờ | Đổi **Storage type** sang **Premium SSD** (không phải v2), rồi chọn lại Burstable |
+| Tạo environment báo `ExpressAzureMonitorLogDestNotSupported` | Environment đang ở loại **Express** (không hỗ trợ đích log Azure Monitor). Quay lại hộp tạo environment, đổi loại về **Consumption only** (chuẩn); nếu Portal chỉ cho Express thì ở tab Monitoring chọn **Don't save logs** (không lưu log) |
 | Lệnh báo biến rỗng hoặc "chưa đặt" | Quên `cd ~/KPDL-NHOM-6 && source ~/kpdl.env` ở phiên SSH mới |
 | `permission denied ... docker.sock` | Chưa đăng nhập lại sau `usermod`: gõ `exit` rồi SSH lại |
 | `docker push` bị từ chối | Chạy lại `echo "$ACR_PW" \| docker login $ACR_LOGIN -u $ACR_NAME --password-stdin`. Chưa bật Admin user của registry thì bật ở Access keys |
