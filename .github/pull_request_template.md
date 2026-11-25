@@ -11,7 +11,7 @@
 - [ ] api
 - [ ] frontend
 - [ ] db (warehouse / mart)
-- [ ] keycloak / docker / ci
+- [ ] docker / ci
 - [ ] docs
 
 ## Loại thay đổi

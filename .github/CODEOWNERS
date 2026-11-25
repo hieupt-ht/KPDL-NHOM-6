@@ -13,7 +13,6 @@
 /docker-compose.yml             @<truong-nhom>
 /.env.example                   @<truong-nhom>
 /.github/                       @<truong-nhom>
-/keycloak/                      @<phu-trach-api>
 
 # ---------- Cơ sở dữ liệu ----------
 /db/warehouse/                  @<phu-trach-ingestion>

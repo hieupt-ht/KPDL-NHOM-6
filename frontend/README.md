@@ -14,7 +14,7 @@ npm run dev
 
 Trên PowerShell thay `cp` bằng `Copy-Item env.example .env.local`. Mở `http://localhost:3000`.
 
-Mặc định `NEXT_PUBLIC_DATA_MODE=demo`: dữ liệu minh họa được gắn nhãn trên giao diện và không cần Docker/API. Góc trên cho phép xem thử Viewer (`Nguyễn Văn A`) hoặc Admin (`Nguyễn Văn B`). Công tắc này chỉ trình diễn hai bố cục; **không xác thực hay cấp quyền thật**. Trong demo, nút Run bị khóa.
+Mặc định `NEXT_PUBLIC_DATA_MODE=demo`: dữ liệu minh họa được gắn nhãn trên giao diện và không cần Docker/API. Không có đăng nhập hay phân quyền. Trong demo, nút Run bị khóa.
 
 Trong chế độ demo, các trang dữ liệu tải lại sau mỗi **8 giây**. Chỉ giá trị điểm cuối của bộ dữ liệu mẫu biến động nhẹ; ngày và các quan sát cũ vẫn giữ nguyên. Biểu đồ vẽ khi mở trang và chuyển mượt đến giá trị mới, giúp trình diễn cách giao diện sẽ phản ứng khi backend có dữ liệu mới. Đây là mô phỏng, không phải luồng dữ liệu thời gian thực. Tắt tab hoặc hệ điều hành bật giảm chuyển động sẽ hạn chế cập nhật/hiệu ứng tương ứng.
 
@@ -31,9 +31,9 @@ Khi mở một tab có biểu đồ, trục và nhãn hiện trước; sau khi E
 ## Nối backend sau này
 
 1. Hoàn thiện các endpoint FastAPI trong `services/api/routers/` trả JSON theo `frontend/types/api.ts`.
-2. Trong `.env.local`, đặt `NEXT_PUBLIC_DATA_MODE=api` và `NEXT_PUBLIC_API_URL=http://localhost:8000`. Khởi động lại Next.js. `frontend/lib/api.ts` đã có URL, query, lỗi HTTP và các hàm gọi `/api/timeseries`, `/api/histogram`, `/api/trend`, `/api/seasonal`, `/api/correlation`, `/api/clusters`, `/api/forecast/*`, `/api/status`, `/api/jobs/{service}/run`. Trước khi tích hợp SSO, backend cần cấu hình chế độ phát triển `AUTH_ENABLED=false` theo README gốc; chỉ dùng trong môi trường phát triển.
+2. Trong `.env.local`, đặt `NEXT_PUBLIC_DATA_MODE=api` và `NEXT_PUBLIC_API_URL=http://localhost:8000`. Khởi động lại Next.js. `frontend/lib/api.ts` đã có URL, query, lỗi HTTP và các hàm gọi `/api/timeseries`, `/api/histogram`, `/api/trend`, `/api/seasonal`, `/api/correlation`, `/api/clusters`, `/api/forecast/*`, `/api/status`, `/api/jobs/{service}/run`. API không yêu cầu token.
 3. Các trang dùng SWR để gọi lại mỗi 5 phút trong chế độ API. Chỉ biểu diễn dữ liệu nhận được; các trường thiếu sẽ hiện trạng thái rỗng hoặc lỗi. Giá trị HTTP/L7/Netflow là **chỉ số tương đối**, bot/human là **%**.
-4. Khi hoàn thành SSO, thay `getAccessToken()` trong `lib/api.ts` bằng token Keycloak từ Auth.js; thay role xem thử trong `components/layout/AppShell.tsx` bằng role đã xác thực và bảo vệ route `/admin`. Backend bắt buộc kiểm tra role `admin` tại endpoint chạy job. Công tắc role hiện tại chỉ ẩn/hiện UI.
+4. Giao diện (cập nhật 24/11/2026): thư viện `lucide-react` (icon), `sonner` (toast), font `@fontsource-variable/inter` + `jetbrains-mono`, chế độ sáng/tối lưu ở `localStorage` (`radar-theme`). Màu biểu đồ đọc từ biến CSS `--chart-*` nên tự đổi theo theme; bảng màu nằm ở đầu `app/globals.css`.
 
 Hiện backend trong repository còn trả `501` cho nhiều endpoint. Nếu đổi sang `api` trước khi backend hoàn thiện, các panel sẽ báo rõ lỗi thay vì hiển thị số liệu minh họa.
 

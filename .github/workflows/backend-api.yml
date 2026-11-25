@@ -13,7 +13,6 @@ on:
       - frontend/**
       - backend/common/**
       - db/**
-      - keycloak/**
       - .dockerignore
       - .env.example
       - docker-compose.yml
@@ -30,7 +29,6 @@ on:
       - frontend/**
       - backend/common/**
       - db/**
-      - keycloak/**
       - .dockerignore
       - .env.example
       - docker-compose.yml

@@ -13,7 +13,7 @@ Mỗi thành viên phụ trách chính một (hoặc vài) thư mục. File `.gi
 | `services/ingestion/`, `db/warehouse/` | *(điền tên)* |
 | `services/analysis/`, `db/mart/` | *(điền tên)* |
 | `services/clustering/`, `services/prediction/`, `training/`, `models/` | *(điền tên)* |
-| `services/api/`, `keycloak/` | *(điền tên)* |
+| `services/api/` | *(điền tên)* |
 | `frontend/` | *(điền tên)* |
 | `docker-compose.yml`, `backend/common/`, `docs/`, README | *(trưởng nhóm)* |
 
@@ -89,7 +89,7 @@ chore(docker): add healthcheck for mart-db
 docs(readme): update demo steps
 ```
 
-Tên service hợp lệ: `ingestion`, `analysis`, `clustering`, `prediction`, `api`, `fe`, `db`, `keycloak`, `common`, `training`, `docker`, `ci`, `readme`.
+Tên service hợp lệ: `ingestion`, `analysis`, `clustering`, `prediction`, `api`, `fe`, `db`, `common`, `training`, `docker`, `ci`, `readme`.
 
 ---
 

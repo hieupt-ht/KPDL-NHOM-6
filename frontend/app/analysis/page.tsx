@@ -4,7 +4,8 @@ import { trafficBotScatter } from "@/lib/traffic-bot-scatter";
 import { useState } from "react";
 import useSWR from "swr";
 import type { EChartsOption } from "echarts";
-import DataChart, { chartBase, colors } from "@/components/charts/DataChart";
+import { BarChart3, Grid3x3, Info, LineChart, ScatterChart, SunMoon, TrendingUp } from "lucide-react";
+import DataChart, { areaGradient, chartBase, colors } from "@/components/charts/DataChart";
 import DashboardFilters, { metricLabels, metricUnit, useDashboardFilters } from "@/components/filters/DashboardFilters";
 import { DataState, PageHeading, Panel, SourceNote } from "@/components/ui/Elements";
 import { DATA_MODE, DATA_REFRESH_INTERVAL, getClusters, getCorrelation, getHistogram, getSeasonal, getTimeseries, getTrend } from "@/lib/api";
@@ -32,17 +33,17 @@ export default function AnalysisPage() {
   const color = filters.metric === "l7_attack" ? c.l7 : filters.metric === "bot_share" ? c.bot : filters.metric === "human_share" ? c.human : filters.metric === "netflows" ? c.netflow : c.http;
   const scatter = trafficBotScatter(scatterTraffic, bot, clusters);
   const scatterGroups = scatter.groups.map(({ name, data }) => ({ name, data, type: "scatter" as const, symbolSize: 10,
-    itemStyle: { color: name === "Bất thường" ? c.l7 : name === "Cao điểm" ? c.bot : name === "Bình thường" ? c.human : "#94A3B8" },
+    itemStyle: { color: name === "Bất thường" ? c.l7 : name === "Cao điểm" ? c.bot : name === "Bình thường" ? c.human : c.muted, opacity: .85, borderColor: c.surface, borderWidth: 1 },
   }));
   const timeOption: EChartsOption = chartBase({
     xAxis: { type: "category", data: time.data?.map(p => dateLabel(p.ts)) ?? [] },
     yAxis: { type: "value", min: 0, name: metricUnit(filters.metric) },
-    series: [{ type: "line", smooth: .25, showSymbol: false, data: time.data?.map(p => p.mean) ?? [], itemStyle: { color }, lineStyle: { width: 3 }, areaStyle: { opacity: .08 } }],
+    series: [{ type: "line", smooth: .25, showSymbol: false, data: time.data?.map(p => p.mean) ?? [], itemStyle: { color }, lineStyle: { width: 3 }, areaStyle: { color: areaGradient(color, .3) } }],
   }, true);
   const histOption: EChartsOption = chartBase({
     xAxis: { type: "category", data: hist.data?.map(p => p.bin_start.toFixed(filters.metric.endsWith("share") ? 0 : 2)) ?? [], axisLabel: { interval: 3 } },
     yAxis: { type: "value", name: "Số mốc" }, tooltip: { trigger: "item" },
-    series: [{ type: "bar", barMaxWidth: 23, data: hist.data?.map(p => p.count) ?? [], itemStyle: { color, borderRadius: [3, 3, 0, 0] } }],
+    series: [{ type: "bar", barMaxWidth: 23, data: hist.data?.map(p => p.count) ?? [], itemStyle: { color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color }, { offset: 1, color: color + "66" }] }, borderRadius: [5, 5, 0, 0] } }],
   });
   const alignedTrend = alignTrendSeries(trendMean.data, trend.data);
   const trendOption: EChartsOption = chartBase({
@@ -56,27 +57,27 @@ export default function AnalysisPage() {
   }, true);
   const seasonalLabels = seasonal.data?.map(p => period === "hour_of_day" ? `${String(p.bucket).padStart(2, "0")}:00` : period === "day_of_week" ? ["T2", "T3", "T4", "T5", "T6", "T7", "CN"][p.bucket] : `T${p.bucket}`) ?? [];
   const seasonalOption: EChartsOption = chartBase({ xAxis: { type: "category", data: seasonalLabels }, yAxis: { type: "value", min: 0, name: metricUnit(filters.metric) },
-    series: [{ type: "line", smooth: .32, data: seasonal.data?.map(p => p.value) ?? [], itemStyle: { color }, showSymbol: false, lineStyle: { width: 3 } }] });
+    series: [{ type: "line", smooth: .32, data: seasonal.data?.map(p => p.value) ?? [], itemStyle: { color }, showSymbol: false, lineStyle: { width: 3 }, areaStyle: { color: areaGradient(color, .22) } }] });
   const scatterOption: EChartsOption = chartBase({ legend: { top: 0, right: 0 }, tooltip: { trigger: "item" },
     xAxis: { type: "value", name: "HTTP", min: 0 }, yAxis: { type: "value", name: "Bot %", min: 0, max: 100 }, series: scatterGroups }, true);
   const labels = ["http_traffic", "l7_attack", "bot_share", "human_share", "netflows"];
   const short = ["HTTP", "L7", "Bot", "Human", "Netflow"];
-  const heatOption: EChartsOption = chartBase({ grid: { left: 85, right: 45, top: 25, bottom: 50 }, tooltip: { trigger: "item" },
+  const heatOption: EChartsOption = chartBase({ grid: { left: 85, right: 45, top: 25, bottom: 64 }, tooltip: { trigger: "item" },
     xAxis: { type: "category", data: short, splitArea: { show: true } }, yAxis: { type: "category", data: short, splitArea: { show: true } },
-    visualMap: { min: -1, max: 1, calculable: false, orient: "horizontal", bottom: 0, left: "center", inRange: { color: [c.neg, "#FCA5A5", "#F1F5F9", "#67C8DD", c.pos] } },
-    series: [{ type: "heatmap", data: correlation.data?.filter(p => p.coef !== null).map(p => [labels.indexOf(p.var_x), labels.indexOf(p.var_y), p.coef]) ?? [], label: { show: true, formatter: (p: { value?: unknown }) => Array.isArray(p.value) ? Number(p.value[2]).toFixed(2) : "" } }],
+    visualMap: { min: -1, max: 1, calculable: false, orient: "horizontal", bottom: 0, left: "center", inRange: { color: [c.neg, c.negSoft, c.zero, c.posSoft, c.pos] }, textStyle: { color: c.axis } },
+    series: [{ type: "heatmap", itemStyle: { borderColor: c.surface, borderWidth: 3, borderRadius: 6 }, data: correlation.data?.filter(p => p.coef !== null).map(p => [labels.indexOf(p.var_x), labels.indexOf(p.var_y), p.coef]) ?? [], label: { show: true, fontWeight: 600, formatter: (p: { value?: unknown }) => Array.isArray(p.value) ? Number(p.value[2]).toFixed(2) : "" } }],
   });
   return <>
-    <PageHeading eyebrow="Khám phá dữ liệu" title="Phân tích dữ liệu">Đối chiếu chuỗi thời gian, phân phối, xu hướng, mùa vụ và tương quan giữa các chỉ số.</PageHeading>
+    <PageHeading eyebrow="Khám phá dữ liệu" icon={BarChart3} title="Phân tích dữ liệu">Đối chiếu chuỗi thời gian, phân phối, xu hướng, mùa vụ và tương quan giữa các chỉ số.</PageHeading>
     <DashboardFilters filters={filters} setFilters={setFilters} />
-    <p className="notice"><strong>Cách đọc:</strong> HTTP, L7 và Netflow là chỉ số tương đối; Bot và Human là tỷ lệ %. {DATA_MODE === "api" ? "Histogram, mùa vụ và tương quan dùng toàn bộ tập dữ liệu phân tích. Bộ lọc ngày áp dụng cho chuỗi thời gian, xu hướng và phân cụm." : "Đang xem dữ liệu minh họa theo bộ lọc."}</p>
+    <p className="notice"><Info size={15} /><span><strong>Cách đọc:</strong> HTTP, L7 và Netflow là chỉ số tương đối; Bot và Human là tỷ lệ %. {DATA_MODE === "api" ? "Histogram, mùa vụ và tương quan dùng toàn bộ tập dữ liệu phân tích. Bộ lọc ngày áp dụng cho chuỗi thời gian, xu hướng và phân cụm." : "Đang xem dữ liệu minh họa theo bộ lọc."}</span></p>
     <div className="grid-half">
-      <Panel title="01 · Chuỗi thời gian" subtitle={`${metricLabels[filters.metric]} · ${metricUnit(filters.metric)} · có zoom`}><DataState loading={time.isLoading} error={time.error} empty={!time.data?.length}><DataChart option={timeOption}/></DataState></Panel>
-      <Panel title="02 · Phân phối giá trị" subtitle="Histogram · 20 khoảng giá trị">{histogramAvailable ? <DataState loading={hist.isLoading} error={hist.error} empty={!hist.data?.length}><DataChart option={histOption}/></DataState> : <div className="empty-state" role="status"><strong>Chưa hỗ trợ histogram cho chỉ số này</strong><small>Analysis hiện cung cấp histogram cho HTTP, L7 và Bot. Các biểu đồ khác vẫn dùng chỉ số đang chọn.</small></div>}</Panel>
-      <Panel title="03 · Xu hướng" subtitle={`Đường trend theo ${trendGranularity === "week" ? "tuần" : "tháng"}`}><DataState loading={trend.isLoading || trendMean.isLoading} error={trend.error || trendMean.error} empty={!trend.data?.length}><DataChart option={trendOption}/></DataState></Panel>
-      <Panel title="04 · Mùa vụ" subtitle="Trung bình theo giờ, thứ hoặc tháng" action={<select className="input" aria-label="Chu kỳ mùa vụ" value={period} onChange={e => setPeriod(e.target.value as typeof period)}><option value="hour_of_day">Theo giờ</option><option value="day_of_week">Theo thứ</option><option value="month">Theo tháng</option></select>}><DataState loading={seasonal.isLoading} error={seasonal.error} empty={!seasonal.data?.length}><DataChart option={seasonalOption}/></DataState></Panel>
-      <Panel title="05 · Lưu lượng và tỷ lệ bot" subtitle="Scatter · HTTP trung bình × Bot (%) theo ngày · có zoom"><DataState loading={scatter.loading} error={scatter.error} empty={scatter.empty}><DataChart option={scatterOption}/><p className="panel-subtitle" role="status">{scatter.pointCount} ngày có đủ dữ liệu HTTP và Bot. {scatter.clusterStatus === "loading" ? "Đang tải nhãn ML; các điểm tạm hiển thị màu xám." : scatter.clusterStatus === "unavailable" ? "Chưa tải được nhãn ML; dữ liệu HTTP–Bot vẫn hiển thị." : scatter.clusterStatus === "missing" ? "Chưa có kết quả phân cụm ML; các điểm hiển thị màu xám." : "Màu theo nhãn ML; màu xám là ngày chưa có nhãn hoặc nhãn chưa có quy ước."}</p></DataState></Panel>
-      <Panel title="06 · Tương quan Pearson" subtitle="Hệ số trong khoảng −1 đến 1"><DataState loading={correlation.isLoading} error={correlation.error} empty={!correlation.data?.length}><DataChart option={heatOption}/></DataState></Panel>
+      <Panel title="01 · Chuỗi thời gian" icon={LineChart} subtitle={`${metricLabels[filters.metric]} · ${metricUnit(filters.metric)} · có zoom`}><DataState loading={time.isLoading} error={time.error} empty={!time.data?.length}><DataChart option={timeOption}/></DataState></Panel>
+      <Panel title="02 · Phân phối giá trị" icon={BarChart3} subtitle="Histogram · 20 khoảng giá trị">{histogramAvailable ? <DataState loading={hist.isLoading} error={hist.error} empty={!hist.data?.length}><DataChart option={histOption}/></DataState> : <div className="empty-state" role="status"><strong>Chưa hỗ trợ histogram cho chỉ số này</strong><small>Analysis hiện cung cấp histogram cho HTTP, L7 và Bot. Các biểu đồ khác vẫn dùng chỉ số đang chọn.</small></div>}</Panel>
+      <Panel title="03 · Xu hướng" icon={TrendingUp} subtitle={`Đường trend theo ${trendGranularity === "week" ? "tuần" : "tháng"}`}><DataState loading={trend.isLoading || trendMean.isLoading} error={trend.error || trendMean.error} empty={!trend.data?.length}><DataChart option={trendOption}/></DataState></Panel>
+      <Panel title="04 · Mùa vụ" icon={SunMoon} subtitle="Trung bình theo giờ, thứ hoặc tháng" action={<select className="input" aria-label="Chu kỳ mùa vụ" value={period} onChange={e => setPeriod(e.target.value as typeof period)}><option value="hour_of_day">Theo giờ</option><option value="day_of_week">Theo thứ</option><option value="month">Theo tháng</option></select>}><DataState loading={seasonal.isLoading} error={seasonal.error} empty={!seasonal.data?.length}><DataChart option={seasonalOption}/></DataState></Panel>
+      <Panel title="05 · Lưu lượng và tỷ lệ bot" icon={ScatterChart} subtitle="Scatter · HTTP trung bình × Bot (%) theo ngày · có zoom"><DataState loading={scatter.loading} error={scatter.error} empty={scatter.empty}><DataChart option={scatterOption}/><p className="panel-subtitle" role="status">{scatter.pointCount} ngày có đủ dữ liệu HTTP và Bot. {scatter.clusterStatus === "loading" ? "Đang tải nhãn ML; các điểm tạm hiển thị màu xám." : scatter.clusterStatus === "unavailable" ? "Chưa tải được nhãn ML; dữ liệu HTTP–Bot vẫn hiển thị." : scatter.clusterStatus === "missing" ? "Chưa có kết quả phân cụm ML; các điểm hiển thị màu xám." : "Màu theo nhãn ML; màu xám là ngày chưa có nhãn hoặc nhãn chưa có quy ước."}</p></DataState></Panel>
+      <Panel title="06 · Tương quan Pearson" icon={Grid3x3} subtitle="Hệ số trong khoảng −1 đến 1"><DataState loading={correlation.isLoading} error={correlation.error} empty={!correlation.data?.length}><DataChart option={heatOption}/></DataState></Panel>
     </div><div style={{ marginTop: 15 }}><SourceNote /></div>
   </>;
 }
