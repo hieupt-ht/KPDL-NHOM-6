@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1840" height="1100" viewBox="0 0 1840 1100" font-family="DejaVu Sans, Arial, sans-serif">
+<defs>
+<marker id="a" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0L10,4L0,8z" fill="#0f766e"/></marker>
+<marker id="p" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0L10,4L0,8z" fill="#7e22ce"/></marker>
+<marker id="b" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0L10,4L0,8z" fill="#1d4ed8"/></marker>
+<marker id="o" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0L10,4L0,8z" fill="#c2410c"/></marker>
+<style>
+.t{font-size:30px;font-weight:700;fill:#0f172a}
+.h{font-size:19px;font-weight:700;fill:#0f172a}
+.s{font-size:15px;fill:#475569}
+.l{font-size:14px;font-weight:600}
+.box{fill:#fff;stroke:#334155;stroke-width:1.6;rx:6}
+</style></defs>
+<rect width="1840" height="1100" fill="#fff"/>
+<text x="30" y="55" class="t">DEPLOYMENT UML TRÊN AZURE (VM + FUNCTION + CONTAINER APPS + POSTGRESQL)</text>
+
+<!-- Azure outer -->
+<rect x="350" y="100" width="1390" height="820" rx="10" fill="#f0f6ff" stroke="#1d4ed8" stroke-width="2"/>
+<text x="368" y="128" class="h">«cloud» Microsoft Azure · Resource group kpdl-rg-1 · eastasia</text>
+
+<!-- Vercel + browser -->
+<rect class="box" x="30" y="150" width="230" height="100"/>
+<text x="45" y="182" class="h">«node» Vercel</text>
+<text x="45" y="206" class="s">Next.js frontend</text>
+<text x="45" y="228" class="s">kpdl-nhom-6.vercel.app</text>
+<rect class="box" x="30" y="290" width="230" height="110"/>
+<text x="45" y="322" class="h">«execution env»</text>
+<text x="45" y="346" class="s">Trình duyệt người dùng</text>
+<text x="45" y="368" class="s">(fetch phía client)</text>
+<line x1="145" y1="290" x2="145" y2="252" stroke="#1d4ed8" stroke-width="2" marker-end="url(#b)"/>
+<text x="155" y="276" class="l" fill="#1d4ed8">tải UI</text>
+<line x1="260" y1="345" x2="410" y2="345" stroke="#1d4ed8" stroke-width="2" marker-end="url(#b)"/>
+<text x="268" y="334" class="l" fill="#1d4ed8">HTTPS /api/*</text>
+
+<!-- Container Apps env -->
+<rect x="380" y="150" width="720" height="390" rx="8" fill="#fff" stroke="#334155" stroke-width="1.6"/>
+<text x="395" y="176" class="h">«execEnv» Azure Container Apps Environment</text>
+<rect class="box" x="410" y="290" width="300" height="110"/>
+<text x="425" y="320" class="h">«container» ca-api</text>
+<text x="425" y="344" class="s">FastAPI · port 8000 · kpdl-api</text>
+<text x="425" y="366" class="s">MART_DSN (api_user, chỉ SELECT)</text>
+<text x="425" y="388" class="s">CORS_ORIGINS = domain Vercel</text>
+<rect class="box" x="760" y="190" width="320" height="80"/>
+<text x="775" y="218" class="h">«container» ca-analysis</text>
+<text x="775" y="242" class="s">port 8001 · logic_user</text>
+<rect class="box" x="760" y="300" width="320" height="80"/>
+<text x="775" y="328" class="h">«container» ca-prediction</text>
+<text x="775" y="352" class="s">port 8003 · image kèm model</text>
+<rect class="box" x="760" y="410" width="320" height="80"/>
+<text x="775" y="438" class="h">«container» ca-clustering</text>
+<text x="775" y="462" class="s">port 8002 · image kèm model</text>
+<!-- api -> run -->
+<polyline points="710,345 735,345" fill="none" stroke="#7e22ce" stroke-width="2" stroke-dasharray="6 4"/>
+<line x1="735" y1="230" x2="735" y2="450" stroke="#7e22ce" stroke-width="2" stroke-dasharray="6 4"/>
+<line x1="735" y1="230" x2="758" y2="230" stroke="#7e22ce" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#p)"/>
+<line x1="735" y1="340" x2="758" y2="340" stroke="#7e22ce" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#p)"/>
+<line x1="735" y1="450" x2="758" y2="450" stroke="#7e22ce" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#p)"/>
+<text x="410" y="212" class="l" fill="#7e22ce">- - → ca-api gọi POST /run</text><text x="410" y="232" class="l" fill="#7e22ce">(JOB_TRIGGER_TOKEN)</text>
+
+<!-- Function -->
+<rect class="box" x="1180" y="150" width="540" height="150"/>
+<text x="1195" y="180" class="h">«function» Azure Function kpdl-func (Timer)</text>
+<text x="1195" y="206" class="s">Analysis: mỗi 5 phút · Prediction: mỗi 5 phút</text>
+<text x="1195" y="228" class="s">Clustering: hằng ngày 17:30 UTC (00:30 giờ VN)</text>
+<text x="1195" y="250" class="s">App settings: ANALYSIS_URL, PREDICTION_URL,</text>
+<text x="1195" y="272" class="s">CLUSTERING_URL, JOB_TRIGGER_TOKEN</text>
+<polyline points="1180,225 1130,225" fill="none" stroke="#7e22ce" stroke-width="2"/>
+<line x1="1130" y1="225" x2="1130" y2="450" stroke="#7e22ce" stroke-width="2"/>
+<line x1="1130" y1="230" x2="1082" y2="230" stroke="#7e22ce" stroke-width="2" marker-end="url(#p)"/>
+<line x1="1130" y1="340" x2="1082" y2="340" stroke="#7e22ce" stroke-width="2" marker-end="url(#p)"/>
+<line x1="1130" y1="450" x2="1082" y2="450" stroke="#7e22ce" stroke-width="2" marker-end="url(#p)"/>
+
+<!-- VM -->
+<rect class="box" x="1180" y="350" width="540" height="190"/>
+<text x="1195" y="380" class="h">«device» Azure VM kpdl-vm (Ubuntu + Docker)</text>
+<text x="1195" y="408" class="s">«container» ingestion (restart: unless-stopped)</text>
+<text x="1195" y="430" class="s">• Thu thập Cloudflare Radar mỗi 5 phút</text>
+<text x="1195" y="452" class="s">• Backfill lịch sử khi khởi động</text>
+<text x="1195" y="474" class="s">• Ghi Bronze + Silver (ingestion_user)</text>
+<text x="1195" y="496" class="s">• Cấu hình ~/kpdl.env, vm-compose.yml</text>
+
+<!-- PostgreSQL -->
+<rect x="380" y="640" width="720" height="240" rx="8" fill="#fff" stroke="#334155" stroke-width="1.6"/>
+<text x="395" y="668" class="h">«database» Azure Database for PostgreSQL Flexible Server</text>
+<text x="395" y="690" class="s">kpdl-pg-x7k2 · Postgres 16</text>
+<rect class="box" x="420" y="720" width="300" height="130"/>
+<text x="435" y="750" class="h">Mart DB</text>
+<text x="435" y="774" class="s">Gold: timeseries, trend, cluster,</text>
+<text x="435" y="796" class="s">forecast, service_runs…</text>
+<text x="435" y="818" class="s">api_user: SELECT · logic_user: ghi</text>
+<rect class="box" x="760" y="720" width="300" height="130"/>
+<text x="775" y="750" class="h">Warehouse DB</text>
+<text x="775" y="774" class="s">Bronze (JSON thô) · Silver</text>
+<text x="775" y="796" class="s">metrics_hourly</text>
+<text x="775" y="818" class="s">ingestion_user: ghi · logic_user: đọc</text>
+
+<!-- arrows to DB -->
+<line x1="565" y1="400" x2="565" y2="718" stroke="#0f766e" stroke-width="2" marker-end="url(#a)"/>
+<text x="555" y="625" class="l" fill="#0f766e" text-anchor="end">api_user: đọc Gold</text>
+<polyline points="800,490 800,600 680,600 680,718" fill="none" stroke="#0f766e" stroke-width="2" marker-end="url(#a)"/>
+<text x="690" y="625" class="l" fill="#0f766e" transform="translate(0,0)">logic_user: ghi Gold</text>
+<line x1="930" y1="490" x2="930" y2="718" stroke="#0f766e" stroke-width="2" marker-end="url(#a)"/>
+<text x="940" y="625" class="l" fill="#0f766e">logic_user: đọc Silver</text>
+<polyline points="1250,540 1250,785 1062,785" fill="none" stroke="#0f766e" stroke-width="2" marker-end="url(#a)"/>
+<text x="1100" y="772" class="l" fill="#0f766e">ghi Bronze/Silver</text>
+
+<!-- ACR -->
+<rect class="box" x="1380" y="660" width="340" height="140"/>
+<text x="1395" y="690" class="h">«registry» ACR kpdlacrx7k2</text>
+<text x="1395" y="714" class="s">kpdl-api:v1 · kpdl-analysis</text>
+<text x="1395" y="736" class="s">kpdl-prediction:v1-models</text>
+<text x="1395" y="758" class="s">kpdl-clustering:v1-models</text>
+<text x="1395" y="780" class="s">Container Apps + VM kéo image</text>
+
+<!-- Radar -->
+<rect class="box" x="1380" y="970" width="340" height="80" stroke="#c2410c"/>
+<text x="1395" y="1000" class="h">«external» Cloudflare Radar</text>
+<text x="1395" y="1024" class="s">HTTPS API ngoài Azure (location=VN)</text>
+<polyline points="1720,445 1790,445 1790,1010 1722,1010" fill="none" stroke="#c2410c" stroke-width="2" marker-end="url(#o)"/>
+<text x="1550" y="960" class="l" fill="#c2410c">HTTPS + CF_API_TOKEN</text>
+
+<!-- legend -->
+<text x="30" y="960" class="h">Chú thích</text>
+<line x1="30" y1="985" x2="90" y2="985" stroke="#1d4ed8" stroke-width="2" marker-end="url(#b)"/><text x="100" y="990" class="s">Trình duyệt ↔ Vercel / ca-api (HTTPS)</text>
+<line x1="30" y1="1015" x2="90" y2="1015" stroke="#7e22ce" stroke-width="2" marker-end="url(#p)"/><text x="100" y="1020" class="s">Gọi POST /run có Bearer token (Function, API)</text>
+<line x1="30" y1="1045" x2="90" y2="1045" stroke="#0f766e" stroke-width="2" marker-end="url(#a)"/><text x="100" y="1050" class="s">Truy cập PostgreSQL theo từng user</text>
+<line x1="30" y1="1075" x2="90" y2="1075" stroke="#c2410c" stroke-width="2" marker-end="url(#o)"/><text x="100" y="1080" class="s">Gọi API ngoài (Cloudflare Radar)</text>
+</svg>
