@@ -329,7 +329,7 @@ Làm theo 11.2 với bảng sau:
 | :--- | :--- | :--- | :--- | :--- |
 | `ca-analysis` | `kpdl-analysis` : `v1` | 8001 | 0.5 / 1 Gi | 1 / 1 |
 
-Ở tab Basics, mục *Container Apps Environment* bấm **Create new**: tên `kpdl-env`, Environment type **Consumption only** (loại chuẩn; **không** chọn *Express*, đây là loại mới còn hạn chế), Zone redundancy tắt; tab Monitoring chọn **Azure Log Analytics** để xem log khi gặp lỗi; **Create**. Nếu Portal báo `ExpressAzureMonitorLogDestNotSupported` thì xem mục 16.
+Ở tab Basics, mục *Container Apps Environment* bấm **Create new**: tên `kpdl-env`, Environment type **Consumption only** hoặc **Workload profiles** (cả hai đều là loại chuẩn; **không** chọn *Express*, đây là loại mới còn hạn chế), Zone redundancy tắt. Nếu có tab **Workload profiles**, dòng *Consumption* bị mờ là bình thường (profile có sẵn, không xóa được); **không** bấm *Add workload profile* vì profile Dedicated tính tiền theo giờ. Tab Monitoring chọn **Azure Log Analytics** để xem log khi gặp lỗi; **Create**. Nếu Portal báo `ExpressAzureMonitorLogDestNotSupported` thì xem mục 16.
 
 **Biến môi trường `ca-analysis`** (`ca-prediction` và `ca-clustering` ở 11.6 dùng đúng bộ này):
 
