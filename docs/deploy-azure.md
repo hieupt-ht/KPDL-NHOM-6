@@ -458,10 +458,10 @@ Mở **Cloud Shell** (biểu tượng `>_` trên thanh trên cùng của Portal)
 git clone -b feat/docker-azure-deploy https://github.com/hieupt-ht/KPDL-NHOM-6.git
 cd KPDL-NHOM-6/deploy/azure/function
 python3 -m zipfile -c ../function.zip function_app.py jobs.py host.json requirements.txt
-az functionapp deploy -g kpdl-rg -n kpdl-func-<SUF> --src-path ../function.zip --type zip
+az functionapp deployment source config-zip -g kpdl-rg -n kpdl-func-<SUF> --src ../function.zip
 ```
 
-Thay `<SUF>` bằng hậu tố của bạn. Lệnh dùng được cho cả Flex Consumption lẫn Consumption. Nếu không chạy, cách khác không cần lệnh: cài VS Code + extension **Azure Functions**, mở thư mục `deploy/azure/function`, bấm `F1` → **Azure Functions: Deploy to Function App** → chọn `kpdl-func-SUF`.
+Thay `<SUF>` bằng hậu tố và `kpdl-rg` bằng tên resource group thật của bạn. Dùng `config-zip`: lệnh `az functionapp deploy ... --type zip` trả lỗi 415 trên gói **Flex Consumption**, và Function App sẽ chạy nhưng danh sách function trống. Sau khi deploy, mở Function App → **Functions** phải thấy đủ 3 function (`analysis_every_5_minutes`, `prediction_every_5_minutes`, `clustering_daily`); nếu trống, bấm **Restart**. Nếu không chạy, cách khác không cần lệnh: cài VS Code + extension **Azure Functions**, mở thư mục `deploy/azure/function`, bấm `F1` → **Azure Functions: Deploy to Function App** → chọn `kpdl-func-SUF`.
 
 Lịch (giờ UTC, trong `function_app.py`): `analysis` và `prediction` mỗi 5 phút (`0 */5 * * * *`); `clustering` lúc 17:30 UTC = 00:30 giờ Việt Nam (`0 30 17 * * *`). Ingestion không nằm ở đây vì đã tự chạy 5 phút trên VM.
 
