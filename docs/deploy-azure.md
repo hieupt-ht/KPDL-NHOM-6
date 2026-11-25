@@ -125,7 +125,15 @@ Nếu gặp lỗi "subscription is not registered to use namespace ...": **Subsc
 
 **Container Apps environment**
 
-Portal hiện **không có nút tạo riêng** environment (trang *Container Apps Environments* chỉ liệt kê, không có **+ Create**). Environment được tạo **cùng lúc với app đầu tiên** ở bước 11.3, nên ở đây chưa làm gì. Sau khi có app đầu tiên bạn sẽ biết **Default domain** (dạng `happy-sea-1a2b3c4d.southeastasia.azurecontainerapps.io`), gọi là `DOMAIN`; địa chỉ mỗi app là `https://<tên app>.DOMAIN`, ví dụ `https://ca-api.DOMAIN`. Vì vậy `DOMAIN` chưa có trong file `kpdl.env` lúc này.
+Trang *Container Apps Environments* của Portal không có nút **+ Create**, và hộp *Create new* khi tạo app có thể tạo nhầm loại **Express** (báo lỗi `ExpressAzureMonitorLogDestNotSupported` hoặc `ExpressEnvironmentManagedIdentityNotSupported`, xem mục 16). Cách chắc nhất là tạo environment loại chuẩn bằng **một lệnh** trong Cloud Shell (Portal → biểu tượng `>_` ở thanh trên → chọn **Bash**):
+
+```bash
+az containerapp env create --name kpdl-env --resource-group kpdl-rg --location REGION
+```
+
+Thay `REGION` bằng region của bạn (viết liền, chữ thường, ví dụ `eastasia`), và `kpdl-rg` bằng tên resource group thật nếu bạn đặt khác. Nếu nó hỏi cài extension `containerapp`, gõ `Y`. Lệnh chạy vài phút, in ra một khối thông tin có `"provisioningState": "Succeeded"` và dòng `"defaultDomain"`, dạng `grayfield-70476478.eastasia.azurecontainerapps.io`. **Chép `defaultDomain` vào Notepad: đó chính là `DOMAIN`.** Địa chỉ mỗi app sẽ là `https://<tên app>.DOMAIN`, ví dụ `https://ca-api.DOMAIN`. Lệnh tự tạo luôn một workspace Log Analytics để lưu log của app.
+
+Khi tạo các app ở mục 11, ô *Container Apps Environment* chỉ việc **chọn `kpdl-env` có sẵn**, không bấm *Create new*.
 
 ## 7. [Portal] Máy ảo (VM)
 
@@ -217,7 +225,7 @@ export CF_API_TOKEN='<token Cloudflare Radar>'
 export ACR_NAME='<Username trên trang Access keys của registry>'
 export ACR_LOGIN='<Login server trên trang Access keys, dạng xxx.azurecr.io>'
 export ACR_PW='<password trên trang Access keys>'
-export DOMAIN=''   # để trống, điền sau khi tạo ca-analysis ở bước 11.3
+export DOMAIN=''   # để trống, điền sau (defaultDomain của kpdl-env lấy ở bước 6)
 
 export INGESTION_WAREHOUSE_DSN="postgresql://ingestion_user:$INGESTION_DB_PASSWORD@$PGHOST:5432/warehouse?sslmode=require"
 export LOGIC_WAREHOUSE_DSN="postgresql://logic_user:$LOGIC_DB_PASSWORD@$PGHOST:5432/warehouse?sslmode=require"
@@ -313,7 +321,7 @@ echo "JOB_TRIGGER_TOKEN:     $JOB_TRIGGER_TOKEN"
 
 **Create a resource**, tìm **Container App** và chọn thẻ **Container App** của *Microsoft* (loại Azure Service). Không chọn *Container App Job*, *Container App Session Pool* hay các thẻ của hãng khác. Bấm **Create**.
 
-- **Basics**: Resource group `kpdl-rg`; Container app name theo bảng; Region cùng region; **Container Apps Environment**: app đầu tiên (11.3) bấm **Create new** (xem 11.3), các app sau chọn `kpdl-env` có sẵn.
+- **Basics**: Resource group `kpdl-rg`; Container app name theo bảng; Region cùng region; **Container Apps Environment**: chọn `kpdl-env` có sẵn (tạo bằng lệnh ở bước 6).
 - **Container**: bỏ tick **Use quickstart image**. Image source **Azure Container Registry**; Registry `kpdlacrSUF` (nếu hỏi cách xác thực, chọn admin credentials / Secrets); Image và Image tag theo bảng; CPU and Memory theo bảng; thêm **Environment variables** theo bảng (kiểu **Manual entry**).
 - **Ingress**: **Enabled**, Ingress traffic **Accepting traffic from anywhere**, Ingress type HTTP, **Target port** theo bảng.
 - **Review + create → Create.**
@@ -321,7 +329,7 @@ echo "JOB_TRIGGER_TOKEN:     $JOB_TRIGGER_TOKEN"
 
 Tên app phải **đúng như bảng** (địa chỉ có dạng `https://<tên app>.DOMAIN`, các app gọi nhau bằng địa chỉ này).
 
-### 11.3 [Portal] Tạo `ca-analysis` đầu tiên (tạo luôn environment) và lấy `DOMAIN`
+### 11.3 [Portal] Tạo `ca-analysis` đầu tiên và điền `DOMAIN`
 
 Làm theo 11.2 với bảng sau:
 
@@ -329,7 +337,7 @@ Làm theo 11.2 với bảng sau:
 | :--- | :--- | :--- | :--- | :--- |
 | `ca-analysis` | `kpdl-analysis` : `v1` | 8001 | 0.5 / 1 Gi | 1 / 1 |
 
-Ở tab Basics, mục *Container Apps Environment* bấm **Create new**: tên `kpdl-env`, Environment type **Consumption only** hoặc **Workload profiles** (cả hai đều là loại chuẩn; **không** chọn *Express*, đây là loại mới còn hạn chế), Zone redundancy tắt. Nếu có tab **Workload profiles**, dòng *Consumption* bị mờ là bình thường (profile có sẵn, không xóa được); **không** bấm *Add workload profile* vì profile Dedicated tính tiền theo giờ. Tab Monitoring chọn **Azure Log Analytics** để xem log khi gặp lỗi; **Create**. Nếu Portal báo `ExpressAzureMonitorLogDestNotSupported` thì xem mục 16.
+Ở tab Basics, mục *Container Apps Environment* chọn `kpdl-env` đã tạo ở bước 6 (đừng bấm *Create new*: hộp đó có thể tạo nhầm loại Express, xem mục 16).
 
 **Biến môi trường `ca-analysis`** (`ca-prediction` và `ca-clustering` ở 11.6 dùng đúng bộ này):
 
@@ -341,7 +349,7 @@ Làm theo 11.2 với bảng sau:
 | `SCHEDULER_ENABLED` | `false` |
 | `TZ_LOCAL` | `Asia/Ho_Chi_Minh` |
 
-Tạo xong, vào app → **Overview** xem **Application Url**, dạng `https://ca-analysis.<DOMAIN>`. Phần sau `ca-analysis.` chính là `DOMAIN`. Điền vào file cấu hình trên VM:
+Tạo xong, vào app → **Overview** xem **Application Url**, dạng `https://ca-analysis.<DOMAIN>`; phần sau `ca-analysis.` phải trùng `defaultDomain` bạn đã chép ở bước 6. Điền `DOMAIN` vào file cấu hình trên VM:
 
 ```bash
 nano ~/kpdl.env        # sửa dòng export DOMAIN='' thành giá trị thật, lưu bằng Ctrl+O, Enter, Ctrl+X
@@ -492,7 +500,7 @@ SSH vào VM, `cd ~/KPDL-NHOM-6 && source ~/kpdl.env`, `git pull`, build lại im
 | :--- | :--- |
 | `RequestDisallowedByPolicy`, "location not available", size bị chặn | Tài khoản sinh viên giới hạn region/size. Chọn region khác (và dùng cho **mọi** dịch vụ, làm lại từ đầu mục đó) hoặc size VM khác |
 | Ô **Burstable** của PostgreSQL bị mờ | Đổi **Storage type** sang **Premium SSD** (không phải v2), rồi chọn lại Burstable |
-| Tạo environment báo `ExpressAzureMonitorLogDestNotSupported` | Environment đang ở loại **Express** (không hỗ trợ đích log Azure Monitor). Quay lại hộp tạo environment, đổi loại về **Consumption only** (chuẩn); nếu Portal chỉ cho Express thì ở tab Monitoring chọn **Don't save logs** (không lưu log) |
+| Tạo environment trong Portal báo `ExpressAzureMonitorLogDestNotSupported` hoặc `ExpressEnvironmentManagedIdentityNotSupported` | Hộp *Create new* của Portal tạo nhầm environment loại **Express** (hạn chế, không hỗ trợ đích log Azure Monitor và managed identity cấp environment). Xóa `kpdl-env` lỗi trong resource group (nếu có), rồi tạo loại chuẩn bằng lệnh `az containerapp env create` ở bước 6 và chọn `kpdl-env` có sẵn khi tạo app (cách này đã chạy được trên region `eastasia`) |
 | Lệnh báo biến rỗng hoặc "chưa đặt" | Quên `cd ~/KPDL-NHOM-6 && source ~/kpdl.env` ở phiên SSH mới |
 | `permission denied ... docker.sock` | Chưa đăng nhập lại sau `usermod`: gõ `exit` rồi SSH lại |
 | `docker push` bị từ chối | Chạy lại `echo "$ACR_PW" \| docker login $ACR_LOGIN -u $ACR_NAME --password-stdin`. Chưa bật Admin user của registry thì bật ở Access keys |
