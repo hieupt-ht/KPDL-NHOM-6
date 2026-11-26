@@ -146,84 +146,68 @@ def _prepare_regular_series(
     return means
 
 
+def _decompose_series(
+    series: pd.Series | None,
+    *,
+    granularity: str,
+    period: int,
+    metric_name: str,
+) -> list[dict[str, Any]]:
+    """Tách xu hướng cho một chuỗi đã chuẩn hóa; trả [] nếu không đủ 2 chu kỳ hoặc lỗi."""
+    min_points = 2 * period
+    n = len(series) if series is not None else 0
+    if series is None or n < min_points:
+        log.info(
+            "Metric '%s': chuỗi %s có %d điểm (< %d yêu cầu cho 2 chu kỳ). Bỏ qua độ phân giải này.",
+            metric_name, granularity, n, min_points,
+        )
+        return []
+    try:
+        decomp = seasonal_decompose(series, model="additive", period=period)
+    except Exception as exc:
+        log.warning("Không thể phân tích trend chuỗi %s cho '%s': %s", granularity, metric_name, exc)
+        return []
+    records: list[dict[str, Any]] = []
+    for ts_idx, val in decomp.trend.dropna().items():
+        if not np.isnan(val) and not np.isinf(val):
+            records.append({
+                "granularity": granularity,
+                "ts": ts_idx.to_pydatetime() if hasattr(ts_idx, "to_pydatetime") else ts_idx,
+                "metric": metric_name,
+                "trend_value": float(val),
+            })
+    log.info("Metric '%s': tách trend chuỗi %s thành công (%d điểm trend)", metric_name, granularity, len(records))
+    return records
+
+
 def decompose_metric_trend(
     metric_name: str,
     metric_df: pd.DataFrame,
     target_tz: zoneinfo.ZoneInfo,
 ) -> list[dict[str, Any]]:
-    """Tách xu hướng cho một chỉ số.
+    """Tách xu hướng cho một chỉ số ở cả hai độ phân giải, độc lập nhau.
 
-    Quy tắc:
-    - Ưu tiên chuỗi tháng: period = 12, cần tối thiểu 2 chu kỳ hoàn chỉnh (>= 24 quan sát liên tục).
-    - Fallback chuỗi tuần: period = 4, cần tối thiểu 2 chu kỳ hoàn chỉnh (>= 8 quan sát liên tục).
+    - Chuỗi tháng: period = 12, cần tối thiểu 2 chu kỳ hoàn chỉnh (>= 24 quan sát liên tục).
+    - Chuỗi tuần: period = 4, cần tối thiểu 2 chu kỳ hoàn chỉnh (>= 8 quan sát liên tục).
+    - Hai chuỗi được tính riêng: chuỗi nào đủ điều kiện thì ghi, chuỗi kia không bị bỏ
+      chỉ vì chuỗi còn lại đã đủ. Trước đây tháng đủ thì tuần bị bỏ, khiến giao diện
+      (vốn gọi tuần cho khoảng ngắn) nhận 404 khi dữ liệu dài hơn 24 tháng.
     - Loại bỏ các giá trị NaN ở đầu và cuối sau khi decompose.
     - Không nội suy hay tạo dữ liệu giả.
-    - Nếu không đủ điều kiện, ghi log lý do và bỏ qua.
+    - Nếu cả hai đều không đủ điều kiện, ghi log lý do và trả danh sách rỗng.
     """
     records: list[dict[str, Any]] = []
-
-    # 1. Thử nghiệm chuỗi tháng trước
-    month_series = _prepare_regular_series(metric_df, freq="M", target_tz=target_tz)
-    min_month_points = 2 * MONTH_PERIOD  # 24 điểm
-
-    if month_series is not None and len(month_series) >= min_month_points:
-        try:
-            decomp = seasonal_decompose(month_series, model="additive", period=MONTH_PERIOD)
-            trend_clean = decomp.trend.dropna()
-            for ts_idx, val in trend_clean.items():
-                if not np.isnan(val) and not np.isinf(val):
-                    records.append({
-                        "granularity": "month",
-                        "ts": ts_idx.to_pydatetime() if hasattr(ts_idx, "to_pydatetime") else ts_idx,
-                        "metric": metric_name,
-                        "trend_value": float(val),
-                    })
-            log.info("Metric '%s': Tách trend thành công trên chuỗi tháng (%d điểm trend)", metric_name, len(records))
-            return records
-        except Exception as exc:
-            log.warning("Không thể phân tích trend chuỗi tháng cho '%s': %s", metric_name, exc)
-
-    month_len = len(month_series) if month_series is not None else 0
-    log.info(
-        "Metric '%s': Chuỗi tháng có %d điểm (< %d yêu cầu cho 2 chu kỳ). Fallback sang chuỗi tuần.",
-        metric_name,
-        month_len,
-        min_month_points,
+    records += _decompose_series(
+        _prepare_regular_series(metric_df, freq="M", target_tz=target_tz),
+        granularity="month", period=MONTH_PERIOD, metric_name=metric_name,
     )
-
-    # 2. Fallback sang chuỗi tuần
-    week_series = _prepare_regular_series(metric_df, freq="W", target_tz=target_tz)
-    min_week_points = 2 * WEEK_PERIOD  # 8 điểm
-
-    if week_series is not None and len(week_series) >= min_week_points:
-        try:
-            decomp = seasonal_decompose(week_series, model="additive", period=WEEK_PERIOD)
-            trend_clean = decomp.trend.dropna()
-            for ts_idx, val in trend_clean.items():
-                if not np.isnan(val) and not np.isinf(val):
-                    records.append({
-                        "granularity": "week",
-                        "ts": ts_idx.to_pydatetime() if hasattr(ts_idx, "to_pydatetime") else ts_idx,
-                        "metric": metric_name,
-                        "trend_value": float(val),
-                    })
-            log.info(
-                "Metric '%s': Tách trend thành công trên chuỗi tuần fallback (%d điểm trend)",
-                metric_name,
-                len(records),
-            )
-            return records
-        except Exception as exc:
-            log.warning("Không thể phân tích trend chuỗi tuần cho '%s': %s", metric_name, exc)
-
-    week_len = len(week_series) if week_series is not None else 0
-    log.warning(
-        "Metric '%s': Không đủ điều kiện tính trend. Chuỗi tuần chỉ có %d điểm (< %d yêu cầu). Bỏ qua metric này.",
-        metric_name,
-        week_len,
-        min_week_points,
+    records += _decompose_series(
+        _prepare_regular_series(metric_df, freq="W", target_tz=target_tz),
+        granularity="week", period=WEEK_PERIOD, metric_name=metric_name,
     )
-    return []
+    if not records:
+        log.warning("Metric '%s': không đủ điều kiện tính trend ở cả chuỗi tháng và tuần. Bỏ qua metric này.", metric_name)
+    return records
 
 
 def compute_trend_records(

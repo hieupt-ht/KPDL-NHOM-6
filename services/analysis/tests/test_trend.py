@@ -289,3 +289,20 @@ def test_trend_duplicate_timestamps_do_not_inflate_completeness():
 
     df = pd.DataFrame(rows)
     assert _prepare_regular_series(df, "W", tz) is None
+
+
+def test_trend_returns_both_month_and_week_when_hourly_data_spans_over_24_months():
+    # ~26 tháng dữ liệu theo giờ, đầy đủ: cả chuỗi tháng lẫn tuần đều hợp lệ.
+    # Trước đây tháng đủ thì tuần bị bỏ, làm giao diện nhận 404 khi xin xu hướng tuần.
+    idx = pd.date_range("2024-01-01", "2026-03-01", freq="h", tz="Asia/Ho_Chi_Minh")
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame({
+        "ts": idx.tz_convert("UTC"),
+        "metric": "http_traffic",
+        "value": 1.0 + 0.2 * np.sin(np.arange(len(idx)) / 2000) + rng.normal(0, 0.01, len(idx)),
+    })
+    records = compute_trend_records(df, metrics=["http_traffic"])
+    granularities = {r["granularity"] for r in records}
+    assert granularities == {"month", "week"}
+    for r in records:
+        assert not np.isnan(r["trend_value"])
